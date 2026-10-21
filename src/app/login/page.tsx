@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [msg, setMsg] = useState("");
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -11,7 +13,14 @@ export default function LoginPage() {
       body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") })
     });
     const data = await res.json().catch(() => ({}));
-    setMsg(res.ok ? "Logged in. Go to the dashboard." : data.error || "Login failed — is the database running?");
+    if (res.ok) {
+      // Success: go straight to the dashboard (the session cookie is set).
+      setMsg("Logged in — taking you to your dashboard…");
+      router.push("/dashboard");
+      router.refresh();
+    } else {
+      setMsg(data.error || "Login failed — is the database running?");
+    }
   }
   return (
     <div className="mx-auto max-w-md pt-6">
