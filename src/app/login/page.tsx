@@ -14,12 +14,33 @@ export default function LoginPage() {
     setMsg(res.ok ? "Logged in. Go to the dashboard." : data.error || "Login failed — is the database running?");
   }
   return (
-    <form onSubmit={submit} className="mx-auto max-w-sm space-y-4">
-      <h1 className="text-2xl font-bold">Log in</h1>
-      <label className="block text-sm">Email<input name="email" type="email" required className="mt-1 w-full rounded border border-zinc-300 p-2 dark:border-zinc-700 dark:bg-zinc-900" /></label>
-      <label className="block text-sm">Password<input name="password" type="password" required className="mt-1 w-full rounded border border-zinc-300 p-2 dark:border-zinc-700 dark:bg-zinc-900" /></label>
-      <button className="w-full rounded bg-zinc-900 py-2 text-white dark:bg-white dark:text-zinc-900">Log in</button>
-      {msg && <p className="text-sm">{msg}</p>}
-    </form>
+    <div className="mx-auto max-w-md pt-6">
+      <form onSubmit={submit} className="glass space-y-5 rounded-3xl p-8 shadow-2xl shadow-black/50">
+        <div className="space-y-2 text-center">
+          <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-cyan-400 shadow-lg shadow-indigo-500/30">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="4" y="10" width="16" height="11" rx="2" />
+              <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+            </svg>
+          </span>
+          <h1 className="text-2xl font-bold tracking-tight">Log in</h1>
+          <p className="text-sm text-zinc-400">Access your cloud browser dashboard.</p>
+        </div>
+        <label className="block text-sm font-medium text-zinc-300">
+          Email
+          <input name="email" type="email" required placeholder="you@example.com" className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-white placeholder-zinc-500 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40" />
+        </label>
+        <label className="block text-sm font-medium text-zinc-300">
+          Password
+          <input name="password" type="password" required placeholder="••••••••••" className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-white placeholder-zinc-500 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40" />
+        </label>
+        <button className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 py-2.5 font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90">Log in</button>
+        {msg && <p className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-zinc-200">{msg}</p>}
+        <p className="text-center text-sm text-zinc-400">
+          New to Secure Cloud Browser?{" "}
+          <a href="/register" className="font-medium text-indigo-300 transition hover:text-indigo-200">Create an account</a>
+        </p>
+      </form>
+    </div>
   );
 }
