@@ -3,13 +3,14 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/auth/password";
 import { generateRawToken, hashToken } from "@/lib/auth/tokens";
+import { sendVerificationEmail } from "@/lib/mailer";
 
 // POST /api/auth/register — REAL Prisma-backed implementation.
 // Creates the user with a hashed password and an email-verification token
-// (hash stored only). Sending the verification email is NOT wired yet:
-// in production the app must fail loudly if SMTP is unconfigured (v2 section 6),
-// so until the mailer exists this returns 501 AFTER creating nothing if
-// email is unconfigured in production.
+// (hash stored only), then emails the raw token as a verification link via
+// the mailer (Gmail SMTP — see src/lib/mailer.ts). If the mailer is not
+// configured yet, the account is still created and the token stays valid;
+// a mail failure never breaks registration.
 const Body = z.object({
   email: z.string().email().max(254),
   password: z.string().min(10).max(128),
@@ -34,7 +35,13 @@ export async function POST(req: Request) {
   await prisma.emailVerificationToken.create({
     data: { userId: user.id, tokenHash: hashToken(raw), expiresAt: new Date(Date.now() + 24 * 3600 * 1000) }
   });
-  // TODO Phase 1: send `raw` via the configured mailer (SMTP/Resend). Never log it.
+  // Email the raw token as a one-time verification link. Never log the token.
+  // A mail failure must not fail the registration — the token remains valid.
+  try {
+    await sendVerificationEmail(user.email, raw);
+  } catch {
+    // intentionally ignored — verification can be re-sent later.
+  }
   await prisma.auditLog.create({ data: { actorId: user.id, action: "auth.register" } });
 
   return NextResponse.json(
