@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import UserMenu from "@/components/UserMenu";
+import { getSessionUserId } from "@/lib/auth/session";
+import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "Secure Cloud Browser",
@@ -17,7 +20,28 @@ function LockMark() {
   );
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+// The header is auth-aware: signed-in visitors see their name + a dropdown
+// (Dashboard / Log out) instead of the Log in / Register buttons. The check
+// reads the same session cookie every API route uses; any failure (no
+// cookie, expired session, DB hiccup) falls back to the logged-out header.
+async function currentUser() {
+  try {
+    const userId = await getSessionUserId();
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, displayName: true }
+    });
+    if (!user) return null;
+    const name = user.displayName?.trim() || user.email.split("@")[0];
+    return { name, email: user.email };
+  } catch {
+    return null;
+  }
+}
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const user = await currentUser();
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="relative min-h-screen overflow-x-hidden bg-[#05070d] text-zinc-100 antialiased">
@@ -37,11 +61,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </span>
             </a>
             <div className="flex items-center gap-2 text-sm sm:gap-5">
-              <a href="/dashboard" className="hidden px-2 py-1.5 text-zinc-300 transition hover:text-white sm:block">Dashboard</a>
-              <a href="/login" className="px-2 py-1.5 text-zinc-300 transition hover:text-white">Log in</a>
-              <a href="/register" className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90">
-                Register
-              </a>
+              {user ? (
+                <>
+                  <a href="/dashboard" className="hidden px-2 py-1.5 text-zinc-300 transition hover:text-white sm:block">Dashboard</a>
+                  <UserMenu name={user.name} email={user.email} />
+                </>
+              ) : (
+                <>
+                  <a href="/dashboard" className="hidden px-2 py-1.5 text-zinc-300 transition hover:text-white sm:block">Dashboard</a>
+                  <a href="/login" className="px-2 py-1.5 text-zinc-300 transition hover:text-white">Log in</a>
+                  <a href="/register" className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90">
+                    Register
+                  </a>
+                </>
+              )}
             </div>
           </nav>
         </header>
@@ -53,8 +86,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <p>Secure Cloud Browser — persistent, shareable, password-free.</p>
             <div className="flex gap-5">
               <a href="/dashboard" className="transition hover:text-zinc-300">Dashboard</a>
-              <a href="/login" className="transition hover:text-zinc-300">Log in</a>
-              <a href="/register" className="transition hover:text-zinc-300">Register</a>
+              {user ? (
+                <span className="text-zinc-400">Signed in as {user.name}</span>
+              ) : (
+                <>
+                  <a href="/login" className="transition hover:text-zinc-300">Log in</a>
+                  <a href="/register" className="transition hover:text-zinc-300">Register</a>
+                </>
+              )}
             </div>
           </div>
         </footer>
