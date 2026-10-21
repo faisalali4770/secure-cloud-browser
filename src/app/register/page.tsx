@@ -11,7 +11,7 @@ export default function RegisterPage() {
       body: JSON.stringify({ email: fd.get("email"), password: fd.get("password"), displayName: fd.get("displayName") || undefined })
     });
     const data = await res.json().catch(() => ({}));
-    setMsg(res.ok ? "Account created — email verification is pending (mailer not wired yet)." : data.error || "Registration failed — is the database running?");
+    setMsg(res.ok ? "Account created — check your email to verify your account." : data.error || "Registration failed — is the database running?");
   }
   return (
     <div className="mx-auto max-w-md pt-6">
