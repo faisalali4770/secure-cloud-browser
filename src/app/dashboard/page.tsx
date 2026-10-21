@@ -1,6 +1,8 @@
+import BrowserPanel from "@/components/BrowserPanel";
 // Dashboard (Phase 1) — redesigned shell: layout and honest empty states.
-// It is intentionally NOT wired to live data yet: profile CRUD and real
-// session status are Phase 1 remaining work (see README PHASE 1 STATUS).
+// The "Your cloud browser" panel is live: it polls /api/browser/status and
+// starts/stops the browser via the orchestrator on the user's host. Profile
+// CRUD is Phase 1 remaining work (see README PHASE 1 STATUS).
 // Nothing on this page is fake data presented as real — the "—" values and
 // notes say exactly what is and is not wired.
 
@@ -77,38 +79,10 @@ export default function DashboardPage() {
             </h1>
             <p className="mt-1.5 text-sm text-zinc-400">Your cloud browsers, sessions and sharing — in one place.</p>
           </div>
-          <button
-            disabled
-            className="cursor-not-allowed rounded-full border border-white/10 bg-white/5 px-5 py-2.5 font-medium text-zinc-500"
-            title="Browser launch is not available until the orchestrator service exists"
-          >
-            ▶ Start browser (not available yet)
-          </button>
         </div>
       </div>
 
-      {/* Browser status */}
-      <div className="glass rounded-3xl p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-red-400 shadow-lg shadow-rose-500/25">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="M3 9h18" />
-              </svg>
-            </span>
-            <h2 className="font-semibold text-white">Browser status</h2>
-          </div>
-          <span className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-1 text-xs font-medium text-rose-300">
-            <span className="h-2 w-2 rounded-full bg-rose-400" />
-            stopped
-          </span>
-        </div>
-        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-          Streaming (Chromium + KasmVNC) is <strong className="text-zinc-200">not tested yet</strong> — Docker is unavailable in the
-          current environment and the orchestrator runs as a clearly-labelled stub that refuses to launch rather than faking a browser.
-        </p>
-      </div>
+      <BrowserPanel />
 
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
