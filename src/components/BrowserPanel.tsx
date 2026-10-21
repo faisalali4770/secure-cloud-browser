@@ -41,7 +41,7 @@ export default function BrowserPanel() {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.streamUrl) {
         window.open(data.streamUrl, "_blank", "noopener");
-        setMsg("Browser started — it opened in a new tab. Your logins stay saved on your host.");
+        setMsg("Browser started — it opened in a new tab. Your logins stay saved in your account storage.");
       } else {
         setMsg(data.error || "Browser could not start.");
       }
@@ -58,7 +58,7 @@ export default function BrowserPanel() {
     try {
       const res = await fetch("/api/browser/stop", { method: "POST" });
       const data = await res.json().catch(() => ({}));
-      setMsg(res.ok ? "Browser stopped. Your profile and logins are saved on your host." : data.error || "Stop failed.");
+      setMsg(res.ok ? "Browser stopped. Your profile and logins are saved in your account storage." : data.error || "Stop failed.");
     } catch {
       setMsg("Stop failed — the host did not answer.");
     }
@@ -80,14 +80,14 @@ export default function BrowserPanel() {
   const explanation = !status
     ? "Checking your browser host…"
     : !status.configured
-      ? "Your browser host is not connected to the website yet. The browser runs on your own PC — start the host there (Docker) and connect it, then this panel comes alive. Nothing is running right now."
+      ? "Your browser host is not connected to the website yet. Once a host is connected, this panel comes alive. Nothing is running right now."
       : !status.hostOnline
-        ? "Your browser host is configured but not answering right now. Check that the PC host is on and connected, then this panel updates itself."
+        ? "Your browser host is configured but not answering right now — a free host may be asleep or still starting (waking can take about a minute). This panel updates itself; you can also press Start browser in a moment."
         : !status.dockerReady
-          ? "Your host answered, but Docker on it is not running yet. Start Docker on the host PC, then press Start browser."
+          ? "Your host answered, but its browser engine is not ready yet. Give it a few seconds, then press Start browser."
           : running
-            ? "Your cloud browser is running. Its profile — cookies and logins — lives on your host and survives stops and restarts."
-            : "Your host is online and Docker is ready. Press Start browser to launch your persistent cloud browser.";
+            ? "Your cloud browser is running. Its profile — cookies and logins — is saved to your account storage and survives stops and restarts."
+            : "Your host is online and ready. Press Start browser to launch your persistent cloud browser.";
 
   return (
     <div className="glass rounded-3xl p-6">
