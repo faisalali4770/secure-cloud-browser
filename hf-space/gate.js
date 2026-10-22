@@ -50,6 +50,13 @@ const TOKEN = process.env.ORCHESTRATOR_INTERNAL_TOKEN || "";
 const APP_URL = (process.env.APP_URL || "").replace(/\/$/, "");
 const PROFILE_DIR = process.env.PROFILE_DIR || "/profile";
 const BROWSER_PORT = 6901;
+// KasmVNC's web server demands HTTP Basic auth for its UI (the user created
+// by the image's kasmvncpasswd step). 6901 is container-internal and every
+// stream request already passed this gate's single-use token + cookie, so
+// the gate injects the internal credential upstream instead of making the
+// visitor's browser answer a second password prompt. Internal-only
+// credential for a localhost service — not a user secret.
+const KASM_BASIC = "Basic " + Buffer.from("browser:scbstream").toString("base64");
 const BROWSER_USER = process.env.BROWSER_USER || "browser";
 const STREAM_COOKIE = "scb_stream";
 const SYNC_EVERY_MS = Number(process.env.SYNC_INTERVAL_MIN || 10) * 60 * 1000;
@@ -95,7 +102,10 @@ async function signedUrl(storageKey, op) {
     headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
     body: JSON.stringify({ storageKey, op }),
   });
-  if (!res.ok) throw new Error(`sync-url ${op} -> HTTP ${res.status}`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`sync-url ${op} -> HTTP ${res.status} ${detail.slice(0, 160)}`);
+  }
   const data = await res.json();
   return data.url || null;
 }
@@ -183,7 +193,11 @@ function browserUp() {
 async function startBrowser() {
   if (await browserUp()) return;
   await run("su", [BROWSER_USER, "-s", "/bin/bash", "-c",
-    `kasmvncserver :1 -websocketPort ${BROWSER_PORT} -SecurityTypes None`], 30000)
+    // KasmVNC 1.5 asks ONE interactive question on first run (desktop
+    // environment; our xstartup is "manual") — answer it via stdin or the
+    // server exits immediately. The write-user prompt is pre-answered by
+    // the kasmvncpasswd step baked into the image.
+    `printf '1\\n' | kasmvncserver :1 -websocketPort ${BROWSER_PORT} -SecurityTypes None`], 30000)
     .catch((e) => console.error(`[browser] start attempt: ${e.message}`));
   for (let i = 0; i < 30; i++) {
     if (await browserUp()) { console.log("[browser] up on :" + BROWSER_PORT); return; }
@@ -292,7 +306,7 @@ function streamCookieOk(req, sessionId) {
 function proxyHttp(req, res) {
   const upstreamPath = req.url.replace(/^\/s\/[^/]+/, "") || "/";
   const up = http.request(
-    { host: "127.0.0.1", port: BROWSER_PORT, path: upstreamPath, method: req.method, headers: req.headers },
+    { host: "127.0.0.1", port: BROWSER_PORT, path: upstreamPath, method: req.method, headers: { ...req.headers, authorization: KASM_BASIC } },
     (upRes) => { res.writeHead(upRes.statusCode, upRes.headers); upRes.pipe(res); }
   );
   up.on("error", () => { if (!res.headersSent) sendJson(res, 502, { error: "browser stream unreachable" }); });
@@ -367,7 +381,7 @@ server.on("upgrade", (req, socket, head) => {
   if (!s || !streamCookieOk(req, sessionId)) { socket.destroy(); return; }
   const upstreamPath = req.url.replace(/^\/s\/[^/]+/, "") || "/";
   const up = net.connect(BROWSER_PORT, "127.0.0.1", () => {
-    const headers = { ...req.headers, host: `127.0.0.1:${BROWSER_PORT}` };
+    const headers = { ...req.headers, host: `127.0.0.1:${BROWSER_PORT}`, authorization: KASM_BASIC };
     const lines = [`${req.method} ${upstreamPath} HTTP/1.1`];
     for (const [k, v] of Object.entries(headers)) lines.push(`${k}: ${v}`);
     up.write(lines.join("\r\n") + "\r\n\r\n");
