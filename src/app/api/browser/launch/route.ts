@@ -40,7 +40,7 @@ export async function POST() {
       // or open one if the app lost track of the live session.
       const open = await prisma.browserSession.findFirst({
         where: { profileId: profile.id, status: { in: ["STARTING", "RUNNING"] } },
-        orderBy: { createdAt: "desc" }
+        orderBy: { startedAt: "desc" }
       });
       if (open) {
         sessionRowId = open.id;
