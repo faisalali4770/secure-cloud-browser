@@ -34,10 +34,43 @@ export async function POST() {
   try {
     // Already running? Reconnect instead of launching a second container.
     let handle = await orchestrator.reconnect(profile.id).catch(() => null);
-    if (!handle) {
+    let sessionRowId: string;
+    if (handle) {
+      // Live on the host. Reuse the newest open row for the token record,
+      // or open one if the app lost track of the live session.
+      const open = await prisma.browserSession.findFirst({
+        where: { profileId: profile.id, status: { in: ["STARTING", "RUNNING"] } },
+        orderBy: { createdAt: "desc" }
+      });
+      if (open) {
+        sessionRowId = open.id;
+        if (open.status !== "RUNNING") {
+          await prisma.browserSession.update({
+            where: { id: open.id },
+            data: { status: "RUNNING", containerRef: handle.containerRef }
+          });
+        }
+      } else {
+        const created = await prisma.browserSession.create({
+          data: { profileId: profile.id, startedById: userId, status: "RUNNING", containerRef: handle.containerRef }
+        });
+        sessionRowId = created.id;
+      }
+    } else {
+      // Nothing live on the host, so any rows still marked open are stale:
+      // the host stops sessions on its own when profiles switch, without
+      // the app being told. Close them first — otherwise the token write
+      // below can touch several RUNNING rows at once, and writing one
+      // streamTokenHash to multiple rows violates its unique constraint
+      // (seen live 2026-10-23, right after a host-side auto-stop).
+      await prisma.browserSession.updateMany({
+        where: { profileId: profile.id, status: { in: ["STARTING", "RUNNING"] } },
+        data: { status: "STOPPED", stoppedAt: new Date(), streamTokenHash: null, streamTokenExpiresAt: null }
+      });
       const session = await prisma.browserSession.create({
         data: { profileId: profile.id, startedById: userId, status: "STARTING" }
       });
+      sessionRowId = session.id;
       try {
         handle = await orchestrator.launch({
           profileId: profile.id,
@@ -60,9 +93,11 @@ export async function POST() {
       void BROWSER_LIMITS; // limits are sent to the orchestrator by the client
     }
 
+    if (!handle) throw new Error("Browser launch produced no session handle.");
     const token = await orchestrator.issueStreamToken(handle.sessionId);
-    await prisma.browserSession.updateMany({
-      where: { profileId: profile.id, status: "RUNNING" },
+    // Write the token to exactly ONE row (see the stale-row note above).
+    await prisma.browserSession.update({
+      where: { id: sessionRowId },
       data: { streamTokenHash: token.tokenHash, streamTokenExpiresAt: token.expiresAt, lastActiveAt: new Date() }
     });
 
