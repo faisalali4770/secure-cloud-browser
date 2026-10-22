@@ -192,6 +192,13 @@ function browserUp() {
 
 async function startBrowser() {
   if (await browserUp()) return;
+  // Stale X lock guard: if Xvnc died uncleanly (e.g. the kasmvncserver
+  // "-kill" deadlock), /tmp/.X1-lock survives in the container layer and
+  // the next kasmvncserver refuses to start ("...:1 is taken because of
+  // /tmp/.X1-lock") even though nothing is listening — seen live after a
+  // container restart 2026-10-22. browserUp() just proved no server is
+  // up, so any lock present is stale by definition; remove it.
+  await run("rm", ["-f", "/tmp/.X1-lock", "/tmp/.X11-unix/X1"], 5000).catch(() => {});
   await run("su", [BROWSER_USER, "-s", "/bin/bash", "-c",
     // KasmVNC 1.5 asks ONE interactive question on first run (desktop
     // environment; our xstartup is "manual") — answer it via stdin or the
