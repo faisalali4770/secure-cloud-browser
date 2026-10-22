@@ -243,11 +243,17 @@ async function launch(body) {
   if (!profileId || !storageKey) throw Object.assign(new Error("invalid profileId/storageKey"), { http: 400 });
 
   if (activeKey && activeKey !== storageKey) {
-    const otherLive = [...sessions.values()].some((s) => s.storageKey === activeKey);
-    if (otherLive) {
-      throw Object.assign(new Error("This free host can run one browser profile at a time, and a different profile is live right now. Stop it first."), { http: 409 });
+    // One browser at a time on this host. A launch for a different profile
+    // stops whatever is live (saving its profile first) and switches.
+    // This used to refuse with 409 "stop it first" — which stranded the
+    // host whenever a user closed the tab without pressing Stop: their
+    // session stayed "live" forever and every later start, from any
+    // account, failed (the user-visible "runs once, then error" bug,
+    // 2026-10-22). Auto-stopping is the right trade-off for a single-
+    // browser free host; the displaced profile is synced out, not lost.
+    for (const [sid, s] of [...sessions]) {
+      if (s.storageKey === activeKey) sessions.delete(sid);
     }
-    // switch profiles: stop the browser, save the old profile, restore the new one
     await stopBrowser();
     await syncOut(activeKey);
     activeKey = null;
