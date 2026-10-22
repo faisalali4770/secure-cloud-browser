@@ -181,7 +181,7 @@ async function syncOut(storageKey) {
 // ---------- local browser process ----------------------------------------------
 function browserUp() {
   return new Promise((resolve) => {
-    const req = http.get({ host: "127.0.0.1", port: BROWSER_PORT, path: "/", timeout: 2500 }, (r) => {
+    const req = http.get({ host: "127.0.0.1", port: BROWSER_PORT, path: "/", timeout: 2500, headers: { authorization: KASM_BASIC } }, (r) => {
       r.resume();
       resolve(true);
     });
@@ -295,12 +295,29 @@ async function reconnect(profileId) {
 }
 
 // ---------- stream gate ---------------------------------------------------------------
-function streamCookieOk(req, sessionId) {
+function streamCookieHashFrom(req) {
   const cookie = req.headers.cookie || "";
   const m = cookie.match(new RegExp(`${STREAM_COOKIE}=([a-f0-9]{64})`));
-  if (!m) return false;
+  return m ? m[1] : null;
+}
+
+function streamCookieOk(req, sessionId) {
+  const hash = streamCookieHashFrom(req);
+  if (!hash) return false;
   const s = sessions.get(sessionId);
-  return !!s && s.streamCookieHash === m[1] && Date.now() < (s.streamCookieExpiresAt || 0);
+  return !!s && s.streamCookieHash === hash && Date.now() < (s.streamCookieExpiresAt || 0);
+}
+
+// The KasmVNC client dials its RFB websocket at the host ROOT (/websockify),
+// not under /s/<session>/ — so a root upgrade is authenticated by looking up
+// which live session the presented stream cookie belongs to.
+function sessionByStreamCookie(req) {
+  const hash = streamCookieHashFrom(req);
+  if (!hash) return null;
+  for (const s of sessions.values()) {
+    if (s.streamCookieHash === hash && Date.now() < (s.streamCookieExpiresAt || 0)) return s;
+  }
+  return null;
 }
 
 function proxyHttp(req, res) {
@@ -335,7 +352,9 @@ const server = http.createServer(async (req, res) => {
         s.streamCookieExpiresAt = Date.now() + 5 * 60 * 1000;
         res.writeHead(302, {
           location: `/s/${sessionId}/`,
-          "set-cookie": `${STREAM_COOKIE}=${s.streamCookieHash}; HttpOnly; Path=/s/; Max-Age=300; SameSite=Lax`,
+          // Path=/ (not /s/): the browser must also send this cookie with the
+          // client's root-level /websockify upgrade — see sessionByStreamCookie.
+          "set-cookie": `${STREAM_COOKIE}=${s.streamCookieHash}; HttpOnly; Path=/; Max-Age=300; SameSite=Lax`,
         });
         return res.end();
       }
@@ -377,9 +396,16 @@ const server = http.createServer(async (req, res) => {
 server.on("upgrade", (req, socket, head) => {
   const parts = req.url.split("/").filter(Boolean);
   const sessionId = parts[0] === "s" ? parts[1] : null;
-  const s = sessionId && sessions.get(sessionId);
-  if (!s || !streamCookieOk(req, sessionId)) { socket.destroy(); return; }
-  const upstreamPath = req.url.replace(/^\/s\/[^/]+/, "") || "/";
+  let upstreamPath;
+  if (sessionId) {
+    const s = sessions.get(sessionId);
+    if (!s || !streamCookieOk(req, sessionId)) { socket.destroy(); return; }
+    upstreamPath = req.url.replace(/^\/s\/[^/]+/, "") || "/";
+  } else if (parts[0] === "websockify" && parts.length === 1) {
+    // KasmVNC client connects to wss://<host>/websockify at the root.
+    if (!sessionByStreamCookie(req)) { socket.destroy(); return; }
+    upstreamPath = req.url;
+  } else { socket.destroy(); return; }
   const up = net.connect(BROWSER_PORT, "127.0.0.1", () => {
     const headers = { ...req.headers, host: `127.0.0.1:${BROWSER_PORT}`, authorization: KASM_BASIC };
     const lines = [`${req.method} ${upstreamPath} HTTP/1.1`];
