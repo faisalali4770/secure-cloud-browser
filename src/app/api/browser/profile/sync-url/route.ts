@@ -27,7 +27,11 @@ async function storageFetch(path: string, init: RequestInit) {
     headers: {
       apikey: s.key,
       authorization: `Bearer ${s.key}`,
-      "content-type": "application/json",
+      // Only claim a JSON body when there IS one: Supabase Storage (Fastify)
+      // rejects an empty body sent with content-type application/json —
+      // "Body cannot be empty when content-type is set to 'application/json'"
+      // (this broke signed upload URLs with a 502; found live 2026-10-22).
+      ...(init.body ? { "content-type": "application/json" } : {}),
       ...(init.headers || {})
     }
   });
@@ -81,7 +85,10 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({ prefixes: [objectPath] })
     }).catch(() => null);
 
-    const res = await storageFetch(`/object/upload/sign/${BUCKET}/${objectPath}`, { method: "POST" });
+    const res = await storageFetch(`/object/upload/sign/${BUCKET}/${objectPath}`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       return NextResponse.json({ error: `could not sign upload URL (${res.status}) ${text.slice(0, 120)}` }, { status: 502 });
