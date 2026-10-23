@@ -362,12 +362,19 @@ const server = http.createServer(async (req, res) => {
         if (!ok) return sendJson(res, 403, { error: "stream token invalid or expired" });
         s.streamTokenHash = null; // single-use
         s.streamCookieHash = hashToken(crypto.randomBytes(32).toString("hex"));
-        s.streamCookieExpiresAt = Date.now() + 5 * 60 * 1000;
+        // The cookie is the stream session's credential — it must live as
+        // long as the session (12h platform cap), NOT the token's 5 min.
+        // At 5 min, any transient socket drop (tunnel hiccup, network
+        // switch) became a permanent "Connection is closed": the client's
+        // reconnect was rejected on the expired cookie (user report,
+        // 2026-10-23). The token stays single-use and short-lived; the
+        // cookie is only a hash in this map and dies with the session.
+        s.streamCookieExpiresAt = Date.now() + 12 * 60 * 60 * 1000;
         res.writeHead(302, {
           location: `/s/${sessionId}/`,
           // Path=/ (not /s/): the browser must also send this cookie with the
           // client's root-level /websockify upgrade — see sessionByStreamCookie.
-          "set-cookie": `${STREAM_COOKIE}=${s.streamCookieHash}; HttpOnly; Path=/; Max-Age=300; SameSite=Lax`,
+          "set-cookie": `${STREAM_COOKIE}=${s.streamCookieHash}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax`,
         });
         return res.end();
       }
