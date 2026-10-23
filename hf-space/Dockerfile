@@ -68,6 +68,16 @@ RUN printf '%s\n' \
       'network:' \
       '  ssl:' \
       '    require_ssl: false' \
+    'data_loss_prevention:' \
+    '  clipboard:' \
+    '    delay_between_operations: none' \
+    '    server_to_client:' \
+    '      enabled: true' \
+    '      size: unlimited' \
+    '      primary_clipboard_enabled: true' \
+    '    client_to_server:' \
+    '      enabled: true' \
+    '      size: unlimited' \
       > /home/browser/.vnc/kasmvnc.yaml \
     && chown browser:browser /home/browser/.vnc/kasmvnc.yaml
 
