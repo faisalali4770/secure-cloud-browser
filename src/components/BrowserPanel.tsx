@@ -211,12 +211,12 @@ export default function BrowserPanel() {
             Host is starting…
           </button>
         )}
-        {(hostReady || csAwake) && !running && (
+        {!!power?.configured && (hostReady || csAwake) && !running && (
           <button onClick={sleep} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stop the host to save your free hours — your profile and logins stay saved">
             🌙 Sleep host
           </button>
         )}
-        {(hostReady || csAwake) && running && (
+        {!!power?.configured && (hostReady || csAwake) && running && (
           <button onClick={sleep} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stops your browser first (profile is saved), then puts the host to sleep">
             🌙 Sleep host
           </button>
