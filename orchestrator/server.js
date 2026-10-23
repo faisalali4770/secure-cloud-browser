@@ -189,10 +189,13 @@ const server = http.createServer(async (req, res) => {
         if (!ok) return sendJson(res, 403, { error: "stream token invalid or expired" });
         s.streamTokenHash = null; // single-use
         s.streamCookieHash = hashToken(crypto.randomBytes(32).toString("hex"));
-        s.streamCookieExpiresAt = Date.now() + 5 * 60 * 1000;
+        // Cookie lifetime = session lifetime (12h cap), not the token's
+        // 5 min — see the note in hf-space/gate.js (a 5-min cookie turned
+        // every transient socket drop into a permanent disconnect).
+        s.streamCookieExpiresAt = Date.now() + 12 * 60 * 60 * 1000;
         res.writeHead(302, {
           location: `/s/${sessionId}/`,
-          "set-cookie": `${STREAM_COOKIE}=${s.streamCookieHash}; HttpOnly; Path=/s/; Max-Age=300; SameSite=Lax`
+          "set-cookie": `${STREAM_COOKIE}=${s.streamCookieHash}; HttpOnly; Path=/s/; Max-Age=43200; SameSite=Lax`
         });
         return res.end();
       }
