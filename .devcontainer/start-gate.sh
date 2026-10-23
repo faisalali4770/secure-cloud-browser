@@ -32,12 +32,47 @@ fi
 docker update --restart unless-stopped "$CID" >/dev/null 2>&1 || true
 docker start "$CID" >/dev/null 2>&1 || true
 
+HEALTHY=0
 for i in $(seq 1 45); do
   if curl -fsS http://localhost:7860/health >/dev/null 2>&1; then
     echo "[gate-autostart] gate is healthy on :7860"
-    exit 0
+    HEALTHY=1
+    break
   fi
   sleep 2
 done
-echo "[gate-autostart] gate did not answer health in time"
+if [ "$HEALTHY" != "1" ]; then
+  echo "[gate-autostart] gate did not answer health in time"
+fi
+
+# The forwarded port reverts to Private on every start that no editor
+# triggers (devcontainer portsAttributes is NOT honored on API wakes —
+# proven 2026-10-24, even after a devcontainer rebuild). Flip it back to
+# Public from inside the Codespace with the gh CLI. gh is NOT part of
+# this devcontainer's base image, so fetch it once if missing — the
+# install persists in the container across restarts, and this also
+# self-heals after any future rebuild. Best effort throughout: if any
+# of this fails, the host itself still works — only the public URL
+# stays locked until someone opens the editor's Ports panel.
+GH_BIN="$(command -v gh || true)"
+if [ -z "$GH_BIN" ] && [ -n "${CODESPACE_NAME:-}" ]; then
+  if curl -fsSL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz" 2>/dev/null; then
+    mkdir -p "$HOME/.local/bin"
+    if tar -xzf /tmp/gh.tar.gz -C /tmp 2>/dev/null && cp /tmp/gh_2.62.0_linux_amd64/bin/gh "$HOME/.local/bin/gh" 2>/dev/null; then
+      chmod +x "$HOME/.local/bin/gh"
+      GH_BIN="$HOME/.local/bin/gh"
+      echo "[gate-autostart] gh CLI installed to ~/.local/bin"
+    fi
+    rm -f /tmp/gh.tar.gz
+  fi
+fi
+if [ -n "$GH_BIN" ] && [ -n "${CODESPACE_NAME:-}" ]; then
+  for i in $(seq 1 10); do
+    if "$GH_BIN" codespace ports visibility 7860:public -c "$CODESPACE_NAME" >/dev/null 2>&1; then
+      echo "[gate-autostart] port 7860 visibility set to public via gh"
+      break
+    fi
+    sleep 3
+  done
+fi
 exit 0
