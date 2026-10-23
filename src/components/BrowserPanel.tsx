@@ -5,6 +5,11 @@ import { useCallback, useEffect, useState } from "react";
 // Start/Stop wired to the orchestrator via the app API. Every state shown is
 // the truth from the server — "host not connected" is a state, not an error
 // disguised as success.
+//
+// Host power: when wake/sleep is set up (/api/host/power), the panel also
+// shows the demo host's real power state from GitHub and offers Wake host /
+// Sleep host — so a free host that sleeps to save quota can be woken from
+// right here, with no trip to GitHub.
 
 type Status = {
   configured: boolean;
@@ -13,8 +18,14 @@ type Status = {
   running: boolean;
 };
 
+type Power = {
+  configured: boolean;
+  state: string | null; // GitHub codespace state: "Available", "Shutdown", "Queued", "Provisioning", ...
+};
+
 export default function BrowserPanel() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [power, setPower] = useState<Power | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -24,6 +35,12 @@ export default function BrowserPanel() {
       if (res.ok) setStatus(await res.json());
     } catch {
       // leave status as-is; the panel keeps its last honest state
+    }
+    try {
+      const res = await fetch("/api/host/power");
+      if (res.ok) setPower(await res.json());
+    } catch {
+      // power state unknown — the panel simply shows no power buttons
     }
   }, []);
 
@@ -66,8 +83,61 @@ export default function BrowserPanel() {
     load();
   }
 
+  async function wake() {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch("/api/host/power", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "wake" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setMsg(
+        res.ok
+          ? "Waking your host — it takes about a minute or two to come online. This panel updates itself."
+          : data.error || "Wake failed."
+      );
+    } catch {
+      setMsg("Wake failed — GitHub did not answer.");
+    }
+    setBusy(false);
+    load();
+  }
+
+  async function sleep() {
+    setBusy(true);
+    setMsg("");
+    try {
+      // Stop the browser first so its profile is saved before the host sleeps.
+      if (status?.running) {
+        await fetch("/api/browser/stop", { method: "POST" }).catch(() => {});
+      }
+      const res = await fetch("/api/host/power", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "sleep" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setMsg(
+        res.ok
+          ? "Your host is going to sleep to save your free hours. Your profile and logins stay saved — wake the host from here any time."
+          : data.error || "Sleep failed."
+      );
+    } catch {
+      setMsg("Sleep failed — GitHub did not answer.");
+    }
+    setBusy(false);
+    load();
+  }
+
   const running = !!status?.running;
   const hostReady = !!status?.configured && !!status?.hostOnline && !!status?.dockerReady;
+
+  const csState = power?.configured ? power.state : null;
+  const csAsleep = csState === "Shutdown";
+  const csAwake = csState === "Available";
+  const csStarting = !!csState && !csAsleep && !csAwake;
 
   const pill = !status
     ? { text: "checking…", cls: "border-white/10 bg-white/5 text-zinc-400", dot: "bg-zinc-400" }
@@ -82,7 +152,11 @@ export default function BrowserPanel() {
     : !status.configured
       ? "Your browser host is not connected to the website yet. Once a host is connected, this panel comes alive. Nothing is running right now."
       : !status.hostOnline
-        ? "Your browser host is configured but not answering right now — a free host may be asleep or still starting (waking can take about a minute). This panel updates itself; you can also press Start browser in a moment."
+        ? csAsleep
+          ? "Your host is asleep to save your free hours — that is normal. Press Wake host below; it takes about a minute or two to come online."
+          : csStarting
+            ? "Your host is starting… give it a minute or two. This panel updates itself."
+            : "Your browser host is configured but not answering right now — a free host may be asleep or still starting (waking can take about a minute). This panel updates itself; you can also press Start browser in a moment."
         : !status.dockerReady
           ? "Your host answered, but its browser engine is not ready yet. Give it a few seconds, then press Start browser."
           : running
@@ -124,6 +198,27 @@ export default function BrowserPanel() {
         ) : (
           <button onClick={start} disabled={busy || !hostReady} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40" title={hostReady ? "Start your cloud browser" : "Available when your browser host is online"}>
             {busy ? "Starting…" : "▶ Start browser"}
+          </button>
+        )}
+
+        {csAsleep && !hostReady && (
+          <button onClick={wake} disabled={busy} className="rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 font-medium text-white shadow-lg shadow-emerald-500/25 transition hover:opacity-90 disabled:opacity-50">
+            {busy ? "Working…" : "⏰ Wake host"}
+          </button>
+        )}
+        {csStarting && (
+          <button disabled className="cursor-wait rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-300 opacity-70">
+            Host is starting…
+          </button>
+        )}
+        {(hostReady || csAwake) && !running && (
+          <button onClick={sleep} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stop the host to save your free hours — your profile and logins stay saved">
+            🌙 Sleep host
+          </button>
+        )}
+        {(hostReady || csAwake) && running && (
+          <button onClick={sleep} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stops your browser first (profile is saved), then puts the host to sleep">
+            🌙 Sleep host
           </button>
         )}
       </div>
