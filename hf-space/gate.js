@@ -333,11 +333,53 @@ function sessionByStreamCookie(req) {
   return null;
 }
 
+// SCB direct-paste fix: the KasmVNC UI client only syncs the local
+// clipboard via navigator.clipboard.readText(), which needs the
+// clipboard-read permission and fails silently. A real Ctrl+V always
+// fires a paste event carrying clipboardData with no permission needed,
+// so the proxy injects paste-fix.js into the served KasmVNC index page to
+// forward pasted text through the client own clipboard pipeline.
+const SCB_PASTE_FIX_JS = fs.readFileSync(__dirname + "/paste-fix.js", "utf8");
 function proxyHttp(req, res) {
   const upstreamPath = req.url.replace(/^\/s\/[^/]+/, "") || "/";
   const up = http.request(
     { host: "127.0.0.1", port: BROWSER_PORT, path: upstreamPath, method: req.method, headers: { ...req.headers, authorization: KASM_BASIC } },
-    (upRes) => { res.writeHead(upRes.statusCode, upRes.headers); upRes.pipe(res); }
+    (upRes) => {
+      // SCB direct-paste fix: inject paste-fix.js into the served KasmVNC index page.
+      const ct = upRes.headers["content-type"] || "";
+      const isHtml = ct.indexOf("text/html") !== -1;
+      const isIndex = upstreamPath === "/" || upstreamPath === "/index.html";
+      if (isHtml && !upRes.headers["content-encoding"] && isIndex) {
+        const chunks = [];
+        upRes.on("data", (c) => chunks.push(c));
+        upRes.on("end", () => {
+          try {
+            let body = Buffer.concat(chunks).toString("utf8");
+            if (body.indexOf("scb-direct-paste") === -1) {
+              const tag = '<script data-scb="scb-direct-paste">' + SCB_PASTE_FIX_JS + "</script>";
+              if (body.indexOf("</body>") !== -1) {
+                body = body.replace("</body>", tag + "</body>");
+              } else {
+                body = body + tag;
+              }
+            }
+            const out = Object.assign({}, upRes.headers);
+            delete out["content-length"];
+            res.writeHead(upRes.statusCode, out);
+            res.end(body);
+          } catch (e) {
+            res.writeHead(upRes.statusCode, upRes.headers);
+            res.end(Buffer.concat(chunks));
+          }
+        });
+        upRes.on("error", () => {
+          if (!res.headersSent) sendJson(res, 502, { error: "browser stream unreachable" });
+        });
+        return;
+      }
+      res.writeHead(upRes.statusCode, upRes.headers);
+      upRes.pipe(res);
+    }
   );
   up.on("error", () => { if (!res.headersSent) sendJson(res, 502, { error: "browser stream unreachable" }); });
   req.pipe(up);

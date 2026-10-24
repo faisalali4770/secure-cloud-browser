@@ -95,6 +95,7 @@ RUN printf '%s\n' \
     && chown browser:browser /home/browser/.vnc/xstartup
 
 COPY gate.js /app/gate.js
+COPY paste-fix.js /app/paste-fix.js
 WORKDIR /app
 EXPOSE 7860
 CMD ["node", "gate.js"]

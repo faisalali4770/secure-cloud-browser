@@ -1,0 +1,3 @@
+!function(){function t(t){try{var e=document.getElementById('noVNC_clipboard_text');if(e){e.value=t;var n;try{n=new Event('change',{bubbles:!0})}catch(t){(n=document.createEvent('Event')).initEvent('change',!0,!0)}e.dispatchEvent(n);return!0}}catch(t){}
+for(var i=['UI','noVNC','vnc'],o=0;o<i.length;o++){try{var c=window[i[o]];if(c){if('function'==typeof c.clipboardPasteFrom)return void c.clipboardPasteFrom(t);if(c.rfb&&'function'==typeof c.rfb.clipboardPasteFrom)return void c.rfb.clipboardPasteFrom(t)}}catch(t){}}return!1}
+document.addEventListener('paste',function(e){try{var n=e.clipboardData||window.clipboardData;if(!n)return;var i=n.getData('text/plain')||n.getData('text');i&&t(i)}catch(e){}},!0)}();
