@@ -88,7 +88,7 @@ RUN printf '%s\n' \
       'unset SESSION_MANAGER' \
       'unset DBUS_SESSION_BUS_ADDRESS' \
       'openbox &' \
-      'chromium --user-data-dir=/profile/chromium --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --start-maximized about:blank &' \
+      'chromium --user-data-dir=/profile/chromium --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --start-maximized --password-store=basic &' \
       'wait' \
       > /home/browser/.vnc/xstartup \
     && chmod +x /home/browser/.vnc/xstartup \

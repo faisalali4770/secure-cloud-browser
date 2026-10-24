@@ -190,6 +190,20 @@ function browserUp() {
   });
 }
 
+function applySessionRestorePref() {
+  // Continue where you left off: without this, Chromium discards plain
+  // session cookies on every exit, so logins that use session cookies are
+  // lost even when the profile itself is saved correctly. Applied at launch,
+  // before the browser starts, so a later Chromium exit cannot overwrite it.
+  try {
+    const prefPath = PROFILE_DIR + "/chromium/Default/Preferences";
+    if (!fs.existsSync(prefPath)) return;
+    const prefs = JSON.parse(fs.readFileSync(prefPath, "utf8"));
+    prefs.session = prefs.session || {};
+    prefs.session.restore_on_startup = 1;
+    fs.writeFileSync(prefPath, JSON.stringify(prefs));
+  } catch (e) { console.error("[browser] session restore pref not applied:", e.message); }
+}
 async function startBrowser() {
   if (await browserUp()) return;
   // Stale X lock guard: if Xvnc died uncleanly (e.g. the kasmvncserver
@@ -214,8 +228,19 @@ async function startBrowser() {
 }
 
 async function stopBrowser() {
+  // Quit Chromium cleanly BEFORE taking down VNC, while its display is still
+  // up, so cookies, sessions and preferences flush to disk. The old order
+  // (kill VNC first, then pkill, no wait) left the profile marked Crashed
+  // with cookie writes still in the SQLite journal, and sync-out archived
+  // that broken state, so every login was lost on the next launch.
+  await run("pkill", ["-TERM", "-f", "chromium"], 10000).catch(() => {});
+  for (let i = 0; i < 40; i++) {
+    const out = await run("pgrep", ["-f", "chromium"], 5000).catch(() => "");
+    if (!out) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   await run("su", [BROWSER_USER, "-s", "/bin/bash", "-c", "kasmvncserver -kill :1"], 15000).catch(() => {});
-  await run("pkill", ["-f", "chromium"], 10000).catch(() => {});
+  await run("pkill", ["-KILL", "-f", "chromium"], 10000).catch(() => {});
 }
 
 // ---------- helpers --------------------------------------------------------------
@@ -276,7 +301,7 @@ async function launch(body) {
   }
   activeKey = storageKey;
 
-  await startBrowser();
+  applySessionRestorePref(); await startBrowser();
   const sessionId = crypto.randomUUID();
   sessions.set(sessionId, { profileId, storageKey, streamTokenHash: null, streamExpiresAt: 0 });
   return { sessionId, status: "running", containerRef: "hf-space" };
@@ -482,7 +507,19 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 setInterval(() => { if (activeKey && sessions.size > 0) syncOut(activeKey); }, SYNC_EVERY_MS).unref();
-process.on("SIGTERM", async () => { await syncOut(activeKey); process.exit(0); });
+process.on("SIGTERM", async () => {
+  // Container stop / host sleep: stop the browser cleanly first, then sync
+  // the flushed profile out. Syncing a live profile (the old behaviour)
+  // archived in-flight cookie databases and lost logins.
+  try {
+    if (activeKey && sessions.size > 0) {
+      await stopBrowser();
+      await syncOut(activeKey);
+    }
+  } catch (e) { console.error("[sync] SIGTERM shutdown failed:", e.message); }
+  process.exit(0);
+});
+
 
 server.listen(PORT, () => {
   console.log(`SCB HF gate listening on :${PORT} (profile dir: ${PROFILE_DIR})`);
