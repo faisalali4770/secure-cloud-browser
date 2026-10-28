@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
-import { getOrchestrator } from "@/lib/browser/orchestrator";
+import { getOrchestratorFor } from "@/lib/browser/orchestrator";
+import { resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 
 // GET /api/browser/status — is the browser host connected, and is a browser
 // running for the signed-in user? Honest states only: when no orchestrator
@@ -35,7 +36,9 @@ export async function GET() {
   const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
 
-  const base = process.env.ORCHESTRATOR_URL;
+  // The host's tunnel URL changes on every restart: prefer a fresh
+  // heartbeated URL, fall back to the ORCHESTRATOR_URL env var.
+  const base = await resolveOrchestratorBase();
   if (!base) {
     return NextResponse.json({ configured: false, hostOnline: false, running: false });
   }
@@ -46,7 +49,7 @@ export async function GET() {
   if (hostOnline && dockerReady) {
     const profile = await prisma.browserProfile.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: "asc" } });
     if (profile) {
-      const handle = await getOrchestrator().reconnect(profile.id).catch(() => null);
+      const handle = await getOrchestratorFor(base).reconnect(profile.id).catch(() => null);
       running = !!handle;
     }
   }
