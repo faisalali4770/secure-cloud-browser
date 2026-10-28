@@ -7,8 +7,10 @@ import { recordHostHeartbeat } from "@/lib/browser/host-endpoint";
 //
 // Auth is the shared internal token in the `x-internal-token` header (the
 // PC agent is not a signed-in user, so there is deliberately no session
-// check). Only https://*.trycloudflare.com URLs are accepted — the host is
-// only ever reached through its Cloudflare quick tunnel.
+// check). Only tunnel URLs of the two transports the PC agent uses are
+// accepted: https://*.trycloudflare.com (Cloudflare quick tunnel) and
+// https://*.ts.net (Tailscale Funnel — a stable address that does not
+// bot-block cloud clients the way the free Cloudflare tunnel does).
 export async function POST(req: Request) {
   const expected = process.env.ORCHESTRATOR_INTERNAL_TOKEN;
   if (!expected) {
@@ -30,8 +32,10 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "url is not a valid URL." }, { status: 400 });
   }
-  if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".trycloudflare.com")) {
-    return NextResponse.json({ error: "url must be an https://*.trycloudflare.com URL." }, { status: 400 });
+  const host = parsed.hostname;
+  const allowedHost = host.endsWith(".trycloudflare.com") || host.endsWith(".ts.net");
+  if (parsed.protocol !== "https:" || !allowedHost) {
+    return NextResponse.json({ error: "url must be an https://*.trycloudflare.com or https://*.ts.net URL." }, { status: 400 });
   }
 
   await recordHostHeartbeat(url);
