@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
-import { getOrchestrator, BROWSER_LIMITS } from "@/lib/browser/orchestrator";
+import { getOrchestratorFor, BROWSER_LIMITS } from "@/lib/browser/orchestrator";
+import { resolveOrchestratorBaseDetailed } from "@/lib/browser/host-endpoint";
 
 // POST /api/browser/launch — start (or reconnect to) the signed-in user's
 // cloud browser and return a one-time stream URL (raw token in the path,
@@ -15,13 +16,17 @@ export async function POST() {
   const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
 
-  if (!process.env.ORCHESTRATOR_URL) {
+  // Resolve the host base dynamically: a fresh heartbeated tunnel URL
+  // wins over the static ORCHESTRATOR_URL env var (the tunnel URL changes
+  // on every host restart).
+  const resolved = await resolveOrchestratorBaseDetailed();
+  if (!resolved) {
     return NextResponse.json(
       { error: "Browser host is not connected yet. Start the host on your PC first — then this button will work." },
       { status: 503 }
     );
   }
-  const orchestrator = getOrchestrator();
+  const orchestrator = getOrchestratorFor(resolved.base);
 
   // One profile per user for now (limit BROWSER_LIMITS.maxProfilesPerUser).
   let profile = await prisma.browserProfile.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: "asc" } });
@@ -101,7 +106,12 @@ export async function POST() {
       data: { streamTokenHash: token.tokenHash, streamTokenExpiresAt: token.expiresAt, lastActiveAt: new Date() }
     });
 
-    const publicBase = (process.env.ORCHESTRATOR_PUBLIC_URL || process.env.ORCHESTRATOR_URL).replace(/\/$/, "");
+    // The stream is opened by the user's browser, so it needs the public
+    // base. When the base came from a heartbeat it IS the current public
+    // tunnel URL; otherwise keep the env public URL (env base fallback).
+    const publicBase = resolved.fromHeartbeat
+      ? resolved.base
+      : (process.env.ORCHESTRATOR_PUBLIC_URL || resolved.base).replace(/\/$/, "");
     const streamUrl = `${publicBase}/s/${handle.sessionId}/${encodeURIComponent(token.rawToken)}`;
     return NextResponse.json({ streamUrl, status: "running" });
   } catch (e) {
