@@ -273,3 +273,14 @@ model SecurityEvents {
   @@index([type])
   @@index([createdAt])
 }
+
+// Single-row table (the row id is always the fixed string "pc-host"): the PC
+// host's current orchestrator base URL. The host is reached through a free
+// tunnel whose URL changes on every host restart, so the PC agent POSTs a
+// heartbeat with its current URL (see /api/host/heartbeat) and the app
+// prefers a fresh heartbeated URL over the static ORCHESTRATOR_URL env var.
+model HostEndpoint {
+  id        String   @id // fixed value "pc-host" — not a uuid, there is only ever one row
+  url       String
+  updatedAt DateTime @updatedAt
+}
