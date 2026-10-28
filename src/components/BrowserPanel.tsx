@@ -43,6 +43,11 @@ export default function BrowserPanel() {
   const [msg, setMsg] = useState("");
   const [newName, setNewName] = useState("");
   const [newBrowser, setNewBrowser] = useState("chromium");
+  // Per-profile UI state: which card is in edit mode / delete-confirm mode.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editBrowser, setEditBrowser] = useState("chromium");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -125,6 +130,66 @@ export default function BrowserPanel() {
       }
     } catch {
       setMsg("Profile could not be created — the site did not answer.");
+    }
+    setBusy(false);
+    load();
+  }
+
+  function beginEdit(p: ProfileInfo) {
+    setEditingId(p.id);
+    setEditName(p.name);
+    setEditBrowser(p.browser);
+    setDeletingId(null);
+    setMsg("");
+  }
+
+  async function saveEdit(profileId: string) {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch("/api/browser/profiles", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: profileId, name: editName, browser: editBrowser }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setEditingId(null);
+        setMsg("Profile updated.");
+      } else {
+        setMsg(data.error || "Profile could not be updated.");
+      }
+    } catch {
+      setMsg("Profile could not be updated — the site did not answer.");
+    }
+    setBusy(false);
+    load();
+  }
+
+  function beginDelete(profileId: string) {
+    setDeletingId(profileId);
+    setEditingId(null);
+    setMsg("");
+  }
+
+  async function deleteProfile(profileId: string) {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await fetch("/api/browser/profiles", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: profileId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setDeletingId(null);
+        setMsg("Profile deleted.");
+      } else {
+        setMsg(data.error || "Profile could not be deleted.");
+      }
+    } catch {
+      setMsg("Profile could not be deleted — the site did not answer.");
     }
     setBusy(false);
     load();
@@ -236,38 +301,89 @@ export default function BrowserPanel() {
 
       <div className="mt-4 space-y-3">
         {profiles.map((p) => (
-          <div key={p.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+          <div key={p.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg shadow-black/20">
             <div className="flex flex-wrap items-center gap-2.5">
-              <span className="font-medium text-white">{p.name}</span>
-              <span className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[11px] font-medium text-zinc-300">
+              <span className="font-semibold text-zinc-100">{p.name}</span>
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${p.browser === "firefox" ? "border-orange-400/30 bg-orange-400/10 text-orange-300" : "border-sky-400/30 bg-sky-400/10 text-sky-300"}`}>
                 {p.browser === "firefox" ? "Firefox" : "Google Chrome"}
               </span>
-              <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${p.running ? "text-emerald-300" : "text-zinc-400"}`}>
+              <span className={`ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${p.running ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-white/5 text-zinc-400"}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${p.running ? "bg-emerald-400" : "bg-zinc-500"}`} />
                 {p.running ? "Running" : "Stopped"}
               </span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {p.running ? (
-                <>
-                  <button onClick={() => startProfile(p.id)} disabled={busy} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:opacity-50">
-                    {busy ? "Working…" : "Open browser"}
+
+            {deletingId === p.id ? (
+              <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/5 px-4 py-3">
+                <p className="text-sm leading-relaxed text-rose-200">Delete this profile? Its saved logins and data will be removed from the site.</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button onClick={() => deleteProfile(p.id)} disabled={busy} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-rose-500/25 transition hover:opacity-90 disabled:opacity-50">
+                    {busy ? "Working…" : "Yes, delete"}
                   </button>
-                  <button onClick={() => stopProfile(p.id)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
-                    Stop browser
+                  <button onClick={() => setDeletingId(null)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                    Cancel
                   </button>
-                </>
-              ) : (
-                <button onClick={() => startProfile(p.id)} disabled={busy || !hostReady} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40" title={hostReady ? "Start your cloud browser" : "Available when your browser host is online"}>
-                  {busy ? "Starting…" : "▶ Start browser"}
-                </button>
-              )}
-            </div>
+                </div>
+              </div>
+            ) : editingId === p.id ? (
+              <div className="mt-3">
+                <div className="flex flex-wrap gap-3">
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Profile name (e.g. Work)"
+                    maxLength={40}
+                    className="min-w-48 flex-1 rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-400/50"
+                  />
+                  <select
+                    value={editBrowser}
+                    onChange={(e) => setEditBrowser(e.target.value)}
+                    className="rounded-full border border-white/15 bg-zinc-900 px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-400/50"
+                  >
+                    <option value="chromium">Google Chrome</option>
+                    <option value="firefox">Firefox</option>
+                  </select>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button onClick={() => saveEdit(p.id)} disabled={busy || !editName.trim()} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+                    {busy ? "Working…" : "Save"}
+                  </button>
+                  <button onClick={() => setEditingId(null)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {p.running ? (
+                  <>
+                    <button onClick={() => startProfile(p.id)} disabled={busy} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:opacity-50">
+                      {busy ? "Working…" : "Open browser"}
+                    </button>
+                    <button onClick={() => stopProfile(p.id)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                      Stop browser
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => startProfile(p.id)} disabled={busy || !hostReady} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40" title={hostReady ? "Start your cloud browser" : "Available when your browser host is online"}>
+                    {busy ? "Starting…" : "▶ Start browser"}
+                  </button>
+                )}
+                <div className="ml-auto flex flex-wrap gap-2">
+                  <button onClick={() => beginEdit(p)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                    Edit
+                  </button>
+                  <button onClick={() => beginDelete(p.id)} disabled={busy} className="rounded-full border border-rose-400/30 bg-rose-400/5 px-4 py-2 text-sm font-medium text-rose-300 transition hover:bg-rose-400/10 disabled:opacity-50">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
       {status && profiles.length === 0 && (
-        <p className="mt-4 text-sm text-zinc-400">No browser profiles yet — create your first one below, then start it from here.</p>
+        <p className="mt-4 text-sm text-zinc-400">No profiles yet — create your first profile below, then start it from here.</p>
       )}
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -293,8 +409,8 @@ export default function BrowserPanel() {
         )}
       </div>
 
-      <div className="mt-5 border-t border-white/10 pt-4">
-        <h3 className="text-sm font-semibold text-white">New profile</h3>
+      <div className="mt-5 rounded-2xl border border-dashed border-white/15 p-4">
+        <h3 className="text-sm font-semibold text-white">＋ New profile</h3>
         {atProfileLimit ? (
           <p className="mt-2 text-sm text-zinc-400">Profile limit reached ({PROFILE_LIMIT}).</p>
         ) : (
