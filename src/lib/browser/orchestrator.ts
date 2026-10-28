@@ -145,4 +145,12 @@ export function getOrchestrator(): BrowserOrchestrator {
   return new LocalStubOrchestrator();
 }
 
+// Orchestrator client for an explicitly resolved base URL — used by callers
+// that resolved the base dynamically (fresh host heartbeat first, env var
+// fallback; see lib/browser/host-endpoint.ts). The internal token still
+// comes from the env, never from the caller.
+export function getOrchestratorFor(baseUrl: string): BrowserOrchestrator {
+  return new DockerOrchestrator(baseUrl.replace(/\/$/, ""), process.env.ORCHESTRATOR_INTERNAL_TOKEN || "");
+}
+
 export function newSessionId(): string { return randomUUID(); }
