@@ -35,6 +35,7 @@ export interface LaunchRequest {
   viewportWidth: number;
   viewportHeight: number;
   viewOnly: boolean; // view-only shares: no input, no clipboard, no downloads
+  browser?: string; // per-profile engine: "chromium" | "firefox" (orchestrator picks the image)
 }
 
 export interface BrowserHandle {
