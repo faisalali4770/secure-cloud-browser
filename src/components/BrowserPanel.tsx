@@ -153,7 +153,7 @@ export default function BrowserPanel() {
       ? "Your browser host is not connected to the website yet. Once a host is connected, this panel comes alive. Nothing is running right now."
       : !status.hostOnline
         ? csAsleep
-          ? "Your host is asleep to save your free hours — that is normal. Press Wake host below; it takes about a minute or two to come online."
+          ? "Your PC host is offline. If your PC is on, it reconnects by itself in a moment — press Check again. If your PC is off, turn it on first: a website cannot switch on a powered-off PC."
           : csStarting
             ? "Your host is starting… give it a minute or two. This panel updates itself."
             : "Your browser host is configured but not answering right now — a free host may be asleep or still starting (waking can take about a minute). This panel updates itself; you can also press Start browser in a moment."
