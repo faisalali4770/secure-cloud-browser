@@ -2,14 +2,17 @@ import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
-import { BROWSER_LIMITS } from "@/lib/browser/orchestrator";
+import { BROWSER_LIMITS, getOrchestratorFor } from "@/lib/browser/orchestrator";
+import { resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 
 // /api/browser/profiles — the signed-in user's OWN browser profiles.
 // GET lists them; POST creates one (name + browser engine choice), subject
-// to BROWSER_LIMITS.maxProfilesPerUser. Profiles are strictly per-user:
-// every query is scoped by ownerId, so one user can never see or create
-// profiles for another. (Sharing profiles with other people is a separate
-// feature and is NOT part of this route.)
+// to BROWSER_LIMITS.maxProfilesPerUser; PATCH edits one (name and/or
+// browser — never storageKey/ownerId); DELETE removes one, with a
+// best-effort cleanup on the host first. Profiles are strictly per-user:
+// every query is scoped by ownerId, so one user can never see, create,
+// edit or delete profiles for another. (Sharing profiles with other
+// people is a separate feature and is NOT part of this route.)
 
 export async function GET() {
   const userId = await getSessionUserId();
@@ -58,4 +61,93 @@ export async function POST(req: Request) {
     { id: profile.id, name: profile.name, browser: profile.browser, createdAt: profile.createdAt },
     { status: 201 }
   );
+}
+
+export async function PATCH(req: Request) {
+  const userId = await getSessionUserId();
+  if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+
+  const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  const id = body && typeof body.id === "string" ? body.id : "";
+  if (!id) return NextResponse.json({ error: "Profile id is required." }, { status: 400 });
+
+  // At least one editable field must be provided; validate each provided
+  // field exactly like POST does. storageKey and ownerId are NEVER part of
+  // an edit — a profile keeps its stored data and its owner, always.
+  const hasName = body !== null && typeof body.name === "string";
+  const hasBrowser = body !== null && typeof body.browser === "string";
+  if (!hasName && !hasBrowser) {
+    return NextResponse.json({ error: "Nothing to update — provide a name and/or a browser." }, { status: 400 });
+  }
+  const data: { name?: string; browser?: string } = {};
+  if (hasName) {
+    const name = (body.name as string).trim();
+    if (name.length < 1 || name.length > 40) {
+      return NextResponse.json({ error: "Profile name must be 1–40 characters." }, { status: 400 });
+    }
+    data.name = name;
+  }
+  if (hasBrowser) {
+    const browser = body.browser as string;
+    if (browser !== "chromium" && browser !== "firefox") {
+      return NextResponse.json({ error: 'Browser must be "chromium" or "firefox".' }, { status: 400 });
+    }
+    data.browser = browser;
+  }
+
+  // Ownership: the profile must belong to the caller (404 otherwise —
+  // never leak that another user's profile exists).
+  const existing = await prisma.browserProfile.findFirst({ where: { id, ownerId: userId } });
+  if (!existing) return NextResponse.json({ error: "Profile not found." }, { status: 404 });
+
+  const profile = await prisma.browserProfile.update({ where: { id: existing.id }, data });
+  return NextResponse.json({ id: profile.id, name: profile.name, browser: profile.browser, createdAt: profile.createdAt });
+}
+
+export async function DELETE(req: Request) {
+  const userId = await getSessionUserId();
+  if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+
+  const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  const id = body && typeof body.id === "string" ? body.id : "";
+  if (!id) return NextResponse.json({ error: "Profile id is required." }, { status: 400 });
+
+  // Ownership: the profile must belong to the caller (404 otherwise).
+  const profile = await prisma.browserProfile.findFirst({ where: { id, ownerId: userId } });
+  if (!profile) return NextResponse.json({ error: "Profile not found." }, { status: 404 });
+
+  // (a) Best-effort host cleanup — every error is swallowed. The host may
+  // be offline or running older code without these endpoints; the delete
+  // must still succeed, so nothing here is allowed to fail the request.
+  try {
+    const base = await resolveOrchestratorBase();
+    if (base) {
+      try {
+        const orchestrator = getOrchestratorFor(base);
+        const handle = await orchestrator.reconnect(profile.id).catch(() => null);
+        if (handle) await orchestrator.stop(handle.sessionId).catch(() => {});
+      } catch {
+        // host unreachable — ignore
+      }
+      try {
+        await fetch(`${base}/profiles/delete`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${process.env.ORCHESTRATOR_INTERNAL_TOKEN || ""}`
+          },
+          body: JSON.stringify({ storageKey: profile.storageKey, profileId: profile.id })
+        });
+      } catch {
+        // host offline — ignore
+      }
+    }
+  } catch {
+    // base resolution failed — ignore
+  }
+
+  // (b) Remove the profile row. Its BrowserSession rows cascade on delete
+  // (see the schema), so no orphan sessions are left behind.
+  await prisma.browserProfile.delete({ where: { id: profile.id } });
+  return NextResponse.json({ ok: true });
 }
