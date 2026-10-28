@@ -144,8 +144,8 @@ export default function BrowserPanel() {
     : running
       ? { text: "running", cls: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300", dot: "bg-emerald-400" }
       : hostReady
-        ? { text: "ready — stopped", cls: "border-amber-400/20 bg-amber-400/10 text-amber-300", dot: "bg-amber-400" }
-        : { text: "host offline", cls: "border-rose-400/20 bg-rose-400/10 text-rose-300", dot: "bg-rose-400" };
+        ? { text: "PC online — ready", cls: "border-amber-400/20 bg-amber-400/10 text-amber-300", dot: "bg-amber-400" }
+        : { text: "PC offline", cls: "border-rose-400/20 bg-rose-400/10 text-rose-300", dot: "bg-rose-400" };
 
   const explanation = !status
     ? "Checking your browser host…"
@@ -153,15 +153,15 @@ export default function BrowserPanel() {
       ? "Your browser host is not connected to the website yet. Once a host is connected, this panel comes alive. Nothing is running right now."
       : !status.hostOnline
         ? csAsleep
-          ? "Your PC host is offline. If your PC is on, it reconnects by itself in a moment — press Check again. If your PC is off, turn it on first: a website cannot switch on a powered-off PC."
+          ? "Your PC is OFFLINE right now. If your PC is on and you are logged in, the host starts by itself and this panel turns online within a minute or two — it updates itself, just wait. If your PC is off, turn it on and log in first: a website cannot switch on a powered-off PC."
           : csStarting
             ? "Your host is starting… give it a minute or two. This panel updates itself."
-            : "Your browser host is configured but not answering right now — a free host may be asleep or still starting (waking can take about a minute). This panel updates itself; you can also press Start browser in a moment."
+            : "Your PC is OFFLINE right now. If your PC is on and you are logged in, the host starts by itself and this panel turns online within a minute or two — it updates itself, just wait. If your PC is off, turn it on and log in first: a website cannot switch on a powered-off PC."
         : !status.dockerReady
           ? "Your host answered, but its browser engine is not ready yet. Give it a few seconds, then press Start browser."
           : running
             ? "Your cloud browser is running. Its profile — cookies and logins — is saved to your account storage and survives stops and restarts."
-            : "Your host is online and ready. Press Start browser to launch your persistent cloud browser.";
+            : "Your PC is ONLINE and your host is live. Press Start browser to launch your persistent cloud browser.";
 
   return (
     <div className="glass rounded-3xl p-6">
