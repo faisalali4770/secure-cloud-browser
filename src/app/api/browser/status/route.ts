@@ -4,9 +4,11 @@ import { getSessionUserId } from "@/lib/auth/session";
 import { getOrchestratorFor } from "@/lib/browser/orchestrator";
 import { resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 
-// GET /api/browser/status — is the browser host connected, and is a browser
-// running for the signed-in user? Honest states only: when no orchestrator
-// is configured this says so (configured: false) instead of pretending.
+// GET /api/browser/status — is the browser host connected, and which of the
+// signed-in user's browsers are running? Honest states only: when no
+// orchestrator is configured this says so (configured: false) instead of
+// pretending. `profiles` lists every profile the caller owns with its own
+// running flag; the top-level `running` is true when ANY profile runs.
 
 // The host is reached through a free tunnel whose first hit can be slow or
 // stall, so the health check uses a generous timeout and one retry — a
@@ -36,23 +38,33 @@ export async function GET() {
   const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
 
+  // Every profile the caller owns (creation order). Running flags are
+  // filled in below only when the host actually answers.
+  const rows = await prisma.browserProfile.findMany({
+    where: { ownerId: userId },
+    orderBy: { createdAt: "asc" }
+  });
+  const profiles = rows.map((p) => ({ id: p.id, name: p.name, browser: p.browser, running: false }));
+
   // The host's tunnel URL changes on every restart: prefer a fresh
   // heartbeated URL, fall back to the ORCHESTRATOR_URL env var.
   const base = await resolveOrchestratorBase();
   if (!base) {
-    return NextResponse.json({ configured: false, hostOnline: false, running: false });
+    return NextResponse.json({ configured: false, hostOnline: false, running: false, profiles });
   }
 
   const { hostOnline, dockerReady } = await fetchHealth(base);
 
-  let running = false;
-  if (hostOnline && dockerReady) {
-    const profile = await prisma.browserProfile.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: "asc" } });
-    if (profile) {
-      const handle = await getOrchestratorFor(base).reconnect(profile.id).catch(() => null);
-      running = !!handle;
-    }
+  if (hostOnline && dockerReady && rows.length > 0) {
+    const orchestrator = getOrchestratorFor(base);
+    // One reconnect check per profile, in parallel; a failed check means
+    // "not running" for that profile only.
+    const flags = await Promise.all(
+      rows.map((p) => orchestrator.reconnect(p.id).then((h) => !!h).catch(() => false))
+    );
+    flags.forEach((flag, i) => { profiles[i].running = flag; });
   }
 
-  return NextResponse.json({ configured: true, hostOnline, dockerReady, running });
+  const running = profiles.some((p) => p.running);
+  return NextResponse.json({ configured: true, hostOnline, dockerReady, running, profiles });
 }
