@@ -8,13 +8,21 @@ import { resolveOrchestratorBaseDetailed } from "@/lib/browser/host-endpoint";
 // cloud browser and return a one-time stream URL (raw token in the path,
 // <= 5 minutes, single-use; only its hash is ever stored).
 //
+// Optional JSON body: { profileId } selects which of the caller's own
+// profiles to launch. Without it, the caller's first profile is used (and
+// created as "My Browser" if they have none yet).
+//
 // The browser itself runs in a container on the user's Docker host via the
 // orchestrator service. If no host is configured/reachable this returns an
 // honest error — it never fakes a browser.
 
-export async function POST() {
+export async function POST(req: Request) {
   const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+
+  // Tolerant body parse: an empty or invalid body just means "no profileId".
+  const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  const profileId = body && typeof body.profileId === "string" ? body.profileId : undefined;
 
   // Resolve the host base dynamically: a fresh heartbeated tunnel URL
   // wins over the static ORCHESTRATOR_URL env var (the tunnel URL changes
@@ -28,8 +36,16 @@ export async function POST() {
   }
   const orchestrator = getOrchestratorFor(resolved.base);
 
-  // One profile per user for now (limit BROWSER_LIMITS.maxProfilesPerUser).
-  let profile = await prisma.browserProfile.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: "asc" } });
+  // Profile resolution: an explicit profileId must belong to the caller
+  // (404 otherwise — never leak that another user's profile exists).
+  // Without one, fall back to the caller's first profile, creating the
+  // default "My Browser" profile (storageKey `u-<userId>`) if none exists.
+  let profile = profileId
+    ? await prisma.browserProfile.findFirst({ where: { id: profileId, ownerId: userId } })
+    : await prisma.browserProfile.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: "asc" } });
+  if (profileId && !profile) {
+    return NextResponse.json({ error: "Profile not found." }, { status: 404 });
+  }
   if (!profile) {
     profile = await prisma.browserProfile.create({
       data: { ownerId: userId, name: "My Browser", storageKey: `u-${userId}` }
@@ -84,7 +100,8 @@ export async function POST() {
           locale: profile.locale,
           viewportWidth: profile.viewportWidth,
           viewportHeight: profile.viewportHeight,
-          viewOnly: false
+          viewOnly: false,
+          browser: profile.browser
         });
       } catch (e) {
         await prisma.browserSession.update({ where: { id: session.id }, data: { status: "ERROR", stoppedAt: new Date() } });
