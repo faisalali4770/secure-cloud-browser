@@ -9,8 +9,9 @@ import { resolveOrchestratorBaseDetailed } from "@/lib/browser/host-endpoint";
 // <= 5 minutes, single-use; only its hash is ever stored).
 //
 // Optional JSON body: { profileId } selects which of the caller's own
-// profiles to launch. Without it, the caller's first profile is used (and
-// created as "My Browser" if they have none yet).
+// profiles to launch. Without it, the caller's first profile is used.
+// Profiles are NEVER created here — only the user creates them himself,
+// via the profiles API / the dashboard form.
 //
 // The browser itself runs in a container on the user's Docker host via the
 // orchestrator service. If no host is configured/reachable this returns an
@@ -38,18 +39,19 @@ export async function POST(req: Request) {
 
   // Profile resolution: an explicit profileId must belong to the caller
   // (404 otherwise — never leak that another user's profile exists).
-  // Without one, fall back to the caller's first profile, creating the
-  // default "My Browser" profile (storageKey `u-<userId>`) if none exists.
-  let profile = profileId
+  // Without one, fall back to the caller's first profile. There is NO
+  // implicit/default profile: if the caller has none, say so honestly.
+  const profile = profileId
     ? await prisma.browserProfile.findFirst({ where: { id: profileId, ownerId: userId } })
     : await prisma.browserProfile.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: "asc" } });
   if (profileId && !profile) {
     return NextResponse.json({ error: "Profile not found." }, { status: 404 });
   }
   if (!profile) {
-    profile = await prisma.browserProfile.create({
-      data: { ownerId: userId, name: "My Browser", storageKey: `u-${userId}` }
-    });
+    return NextResponse.json(
+      { error: "No profile yet — create your first profile, then start it." },
+      { status: 400 }
+    );
   }
 
   try {
