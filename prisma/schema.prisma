@@ -120,6 +120,9 @@ model BrowserProfile {
   ownerId   String @db.Uuid
   owner     User   @relation("ProfileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   name      String
+  // Browser engine for this profile: "chromium" or "firefox" (chosen at
+  // profile creation; validated in the API, stored as a plain string).
+  browser   String @default("chromium")
   // Consistent per-profile environment (v2 Part A section 4): keep fingerprint
   // stable across reconnects so external sites don't flag "new device" each time.
   timezone  String @default("UTC")
