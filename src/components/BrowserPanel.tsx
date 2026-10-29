@@ -1,29 +1,34 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 // Live browser panel for the dashboard: real status from /api/browser/status,
 // Start/Stop wired to the orchestrator via the app API. Every state shown is
 // the truth from the server — "host not connected" is a state, not an error
 // disguised as success.
 //
-// Host power: when wake/sleep is set up (/api/host/power), the panel also
-// shows the demo host's real power state from GitHub and offers Wake host /
-// Sleep host — so a free host that sleeps to save quota can be woken from
-// right here, with no trip to GitHub.
+// Status and power are FETCHED ONCE by the parent (DashboardLive) and passed
+// in as props: the panel and the dashboard stat cards share that single
+// fetch, so they can never contradict each other.
+//
+// Backup host power: when wake/sleep is set up (/api/host/power), a clearly
+// separated section at the bottom offers Wake host / Sleep host for the
+// BACKUP Codespace host only — those buttons never control the PC host.
 
-type ProfileInfo = {
+export type ProfileInfo = {
   id: string;
   name: string;
   browser: string; // "chromium" | "firefox"
+  description?: string | null; // optional purpose label (additive; may be absent in older responses)
   running: boolean;
 };
 
-type Status = {
+export type Status = {
   configured: boolean;
   hostOnline: boolean;
   dockerReady?: boolean;
   running: boolean;
   profiles?: ProfileInfo[];
+  hostLastSeenAt?: string | null; // ISO time of the last host heartbeat (additive)
 };
 
 // Mirrors BROWSER_LIMITS.maxProfilesPerUser on the server. That constant
@@ -31,44 +36,35 @@ type Status = {
 // this client component — keep the two in sync.
 const PROFILE_LIMIT = 3;
 
-type Power = {
+export type Power = {
   configured: boolean;
   state: string | null; // GitHub codespace state: "Available", "Shutdown", "Queued", "Provisioning", ...
 };
 
-export default function BrowserPanel() {
-  const [status, setStatus] = useState<Status | null>(null);
-  const [power, setPower] = useState<Power | null>(null);
+export default function BrowserPanel({
+  status,
+  power,
+  refresh,
+}: {
+  status: Status | null;
+  power: Power | null;
+  refresh: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [newName, setNewName] = useState("");
   const [newBrowser, setNewBrowser] = useState("chromium");
+  const [newDescription, setNewDescription] = useState("");
   // Per-profile UI state: which card is in edit mode / delete-confirm mode.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editBrowser, setEditBrowser] = useState("chromium");
+  const [editDescription, setEditDescription] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Backup-host power confirm: which action is awaiting confirmation.
+  const [confirmPower, setConfirmPower] = useState<"wake" | "sleep" | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/browser/status");
-      if (res.ok) setStatus(await res.json());
-    } catch {
-      // leave status as-is; the panel keeps its last honest state
-    }
-    try {
-      const res = await fetch("/api/host/power");
-      if (res.ok) setPower(await res.json());
-    } catch {
-      // power state unknown — the panel simply shows no power buttons
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
-  }, [load]);
+  const load = refresh;
 
   async function startProfile(profileId: string) {
     setBusy(true);
@@ -118,12 +114,13 @@ export default function BrowserPanel() {
       const res = await fetch("/api/browser/profiles", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: newName, browser: newBrowser }),
+        body: JSON.stringify({ name: newName, browser: newBrowser, description: newDescription }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setNewName("");
         setNewBrowser("chromium");
+        setNewDescription("");
         setMsg("Profile created — start it from its card above whenever your host is online.");
       } else {
         setMsg(data.error || "Profile could not be created.");
@@ -139,6 +136,7 @@ export default function BrowserPanel() {
     setEditingId(p.id);
     setEditName(p.name);
     setEditBrowser(p.browser);
+    setEditDescription(p.description ?? "");
     setDeletingId(null);
     setMsg("");
   }
@@ -150,7 +148,7 @@ export default function BrowserPanel() {
       const res = await fetch("/api/browser/profiles", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: profileId, name: editName, browser: editBrowser }),
+        body: JSON.stringify({ id: profileId, name: editName, browser: editBrowser, description: editDescription }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -198,6 +196,7 @@ export default function BrowserPanel() {
   async function wake() {
     setBusy(true);
     setMsg("");
+    setConfirmPower(null);
     try {
       const res = await fetch("/api/host/power", {
         method: "POST",
@@ -220,6 +219,7 @@ export default function BrowserPanel() {
   async function sleep() {
     setBusy(true);
     setMsg("");
+    setConfirmPower(null);
     try {
       // Stop the browser first so its profile is saved before the host sleeps.
       if (status?.running) {
@@ -253,13 +253,21 @@ export default function BrowserPanel() {
   const csAwake = csState === "Available";
   const csStarting = !!csState && !csAsleep && !csAwake;
 
+  // One pill wording everywhere: the pill reports the HOST state only
+  // ("PC online — ready" / "PC offline"); whether a browser is running is
+  // shown by the per-profile badges and the explanation line, not the pill.
   const pill = !status
     ? { text: "checking…", cls: "border-white/10 bg-white/5 text-zinc-400", dot: "bg-zinc-400" }
-    : running
-      ? { text: "running", cls: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300", dot: "bg-emerald-400" }
-      : hostReady
-        ? { text: "PC online — ready", cls: "border-amber-400/20 bg-amber-400/10 text-amber-300", dot: "bg-amber-400" }
-        : { text: "PC offline", cls: "border-rose-400/20 bg-rose-400/10 text-rose-300", dot: "bg-rose-400" };
+    : hostReady
+      ? { text: "PC online — ready", cls: "border-amber-400/20 bg-amber-400/10 text-amber-300", dot: "bg-amber-400" }
+      : { text: "PC offline", cls: "border-rose-400/20 bg-rose-400/10 text-rose-300", dot: "bg-rose-400" };
+
+  // Last-seen: only when the host is offline and the server sent the field
+  // (older responses without it simply show nothing extra).
+  const lastSeenText =
+    status && !status.hostOnline && typeof status.hostLastSeenAt === "string" && status.hostLastSeenAt
+      ? new Date(status.hostLastSeenAt).toLocaleString()
+      : null;
 
   const explanation = !status
     ? "Checking your browser host…"
@@ -297,6 +305,9 @@ export default function BrowserPanel() {
       </div>
 
       <p className="mt-3 text-sm leading-relaxed text-zinc-400">{explanation}</p>
+      {lastSeenText && (
+        <p className="mt-2 text-sm text-zinc-500">Host aakhri dafa online tha: {lastSeenText}</p>
+      )}
       {msg && <p className="mt-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-zinc-200">{msg}</p>}
 
       <div className="mt-4 space-y-3">
@@ -312,6 +323,9 @@ export default function BrowserPanel() {
                 {p.running ? "Running" : "Stopped"}
               </span>
             </div>
+            {typeof p.description === "string" && p.description.trim() !== "" && (
+              <p className="mt-1.5 text-sm text-zinc-400">{p.description}</p>
+            )}
 
             {deletingId === p.id ? (
               <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/5 px-4 py-3">
@@ -344,6 +358,13 @@ export default function BrowserPanel() {
                     <option value="firefox">Firefox</option>
                   </select>
                 </div>
+                <input
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="Ye profile kis kaam ke liye hai (optional)"
+                  maxLength={200}
+                  className="mt-3 w-full rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-400/50"
+                />
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button onClick={() => saveEdit(p.id)} disabled={busy || !editName.trim()} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
                     {busy ? "Working…" : "Save"}
@@ -386,56 +407,110 @@ export default function BrowserPanel() {
         <p className="mt-4 text-sm text-zinc-400">No profiles yet — create your first profile below, then start it from here.</p>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-3">
-        {csAsleep && !hostReady && (
-          <button onClick={wake} disabled={busy} className="rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 font-medium text-white shadow-lg shadow-emerald-500/25 transition hover:opacity-90 disabled:opacity-50">
-            {busy ? "Working…" : "⏰ Wake host"}
-          </button>
-        )}
-        {csStarting && (
-          <button disabled className="cursor-wait rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-300 opacity-70">
-            Host is starting…
-          </button>
-        )}
-        {!!power?.configured && (hostReady || csAwake) && !running && (
-          <button onClick={sleep} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stop the host to save your free hours — your profile and logins stay saved">
-            🌙 Sleep host
-          </button>
-        )}
-        {!!power?.configured && (hostReady || csAwake) && running && (
-          <button onClick={sleep} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stops your browser first (profile is saved), then puts the host to sleep">
-            🌙 Sleep host
-          </button>
-        )}
-      </div>
-
       <div className="mt-5 rounded-2xl border border-dashed border-white/15 p-4">
         <h3 className="text-sm font-semibold text-white">＋ New profile</h3>
         {atProfileLimit ? (
           <p className="mt-2 text-sm text-zinc-400">Profile limit reached ({PROFILE_LIMIT}).</p>
         ) : (
-          <div className="mt-3 flex flex-wrap gap-3">
+          <>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Profile name (e.g. Work)"
+                maxLength={40}
+                className="min-w-48 flex-1 rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-400/50"
+              />
+              <select
+                value={newBrowser}
+                onChange={(e) => setNewBrowser(e.target.value)}
+                className="rounded-full border border-white/15 bg-zinc-900 px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-400/50"
+              >
+                <option value="chromium">Google Chrome</option>
+                <option value="firefox">Firefox</option>
+              </select>
+              <button onClick={addProfile} disabled={busy || !newName.trim()} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+                {busy ? "Working…" : "Add profile"}
+              </button>
+            </div>
             <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="Profile name (e.g. Work)"
-              maxLength={40}
-              className="min-w-48 flex-1 rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-400/50"
+              value={newDescription}
+              onChange={(e) => setNewDescription(e.target.value)}
+              placeholder="Ye profile kis kaam ke liye hai (optional)"
+              maxLength={200}
+              className="mt-3 w-full rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-400/50"
             />
-            <select
-              value={newBrowser}
-              onChange={(e) => setNewBrowser(e.target.value)}
-              className="rounded-full border border-white/15 bg-zinc-900 px-4 py-2.5 text-sm text-white outline-none focus:border-indigo-400/50"
-            >
-              <option value="chromium">Google Chrome</option>
-              <option value="firefox">Firefox</option>
-            </select>
-            <button onClick={addProfile} disabled={busy || !newName.trim()} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
-              {busy ? "Working…" : "Add profile"}
-            </button>
-          </div>
+          </>
         )}
       </div>
+
+      {/* Backup host (Codespace) power — CLEARLY separated from the PC host
+          above. These buttons control ONLY the old backup Codespace host;
+          they never touch the PC host. Both actions ask for confirmation
+          first. The buttons are never hidden when power is configured —
+          when neither action applies, a note says why. */}
+      {!!power?.configured && (
+        <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+          <h3 className="text-sm font-semibold text-white">⏰ Backup host (Codespace) — sirf backup ke liye</h3>
+          <p className="mt-1.5 text-sm leading-relaxed text-zinc-400">
+            Ye buttons sirf purane backup host (GitHub Codespace) ke liye hain. Aap ka roz ka host aap ka apna PC hai —
+            ye buttons PC ko control <span className="font-semibold text-zinc-200">NAHI</span> karte.
+          </p>
+
+          {confirmPower === "wake" ? (
+            <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3">
+              <p className="text-sm leading-relaxed text-emerald-100">
+                Backup host ko jagayein? Ye GitHub Codespace wala backup host jage ga — aap ka PC host is se nahi jage ga.
+                Takreeban 1–2 minute lagte hain, aur jaga hua Codespace aap ke free hours khata hai.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button onClick={wake} disabled={busy} className="rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-emerald-500/25 transition hover:opacity-90 disabled:opacity-50">
+                  {busy ? "Working…" : "⏰ Haan, wake karo"}
+                </button>
+                <button onClick={() => setConfirmPower(null)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : confirmPower === "sleep" ? (
+            <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3">
+              <p className="text-sm leading-relaxed text-amber-100">
+                Backup host ko sulayein? Chal raha browser pehle stop hoga (profile save ho jayega), phir Codespace host so
+                jayega taake aap ke free hours bachen. Aap ka PC host chalta rahega — ye sirf backup host ke liye hai.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button onClick={sleep} disabled={busy} className="rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-amber-500/25 transition hover:opacity-90 disabled:opacity-50">
+                  {busy ? "Working…" : "🌙 Haan, sleep karo"}
+                </button>
+                <button onClick={() => setConfirmPower(null)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {csAsleep && !hostReady && (
+                <button onClick={() => setConfirmPower("wake")} disabled={busy} className="rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 font-medium text-white shadow-lg shadow-emerald-500/25 transition hover:opacity-90 disabled:opacity-50">
+                  ⏰ Wake backup host
+                </button>
+              )}
+              {csStarting && (
+                <button disabled className="cursor-wait rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-300 opacity-70">
+                  Backup host is starting…
+                </button>
+              )}
+              {(hostReady || csAwake) && (
+                <button onClick={() => setConfirmPower("sleep")} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50" title="Stops the running browser first (profile is saved), then puts the BACKUP Codespace host to sleep. Your PC host is not affected.">
+                  🌙 Sleep backup host
+                </button>
+              )}
+              {!csAsleep && !csStarting && !hostReady && !csAwake && (
+                <p className="text-sm text-zinc-500">Backup host ki halat abhi maloom nahi — thodi der mein panel khud update ho jayega.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
