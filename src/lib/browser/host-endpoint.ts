@@ -18,13 +18,35 @@ function stripTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-export async function recordHostHeartbeat(url: string): Promise<void> {
+// prevEnd (v20 agent): how the host's previous run ended — "abrupt" or
+// "clean", already validated by the heartbeat route. Three cases for the
+// stored value:
+//   - a validated string  → store it;
+//   - null                → the agent sent the field with an unusable
+//                           value; store null (unknown);
+//   - undefined           → the heartbeat carried NO prevEnd field (older
+//                           agent): leave the stored value untouched so a
+//                           previously recorded classification survives.
+export async function recordHostHeartbeat(url: string, prevEnd?: string | null): Promise<void> {
   const clean = stripTrailingSlash(url);
   await prisma.hostEndpoint.upsert({
     where: { id: HOST_ENDPOINT_ID },
-    create: { id: HOST_ENDPOINT_ID, url: clean },
-    update: { url: clean }
+    create: { id: HOST_ENDPOINT_ID, url: clean, ...(prevEnd !== undefined ? { prevEnd } : {}) },
+    update: { url: clean, ...(prevEnd !== undefined ? { prevEnd } : {}) }
   });
+}
+
+// The stored previous-run classification ("abrupt" | "clean"), or null
+// when unknown / never recorded. Read-only, same failure posture as
+// getHostLastSeenAt: a missing column (SQL not run yet) or unreachable DB
+// yields null instead of failing the request.
+export async function getHostPrevEnd(): Promise<string | null> {
+  try {
+    const row = await prisma.hostEndpoint.findUnique({ where: { id: HOST_ENDPOINT_ID } });
+    return row?.prevEnd ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export interface ResolvedOrchestratorBase {
