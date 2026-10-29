@@ -14,12 +14,21 @@ import { useState } from "react";
 // separated section at the bottom offers Wake host / Sleep host for the
 // BACKUP Codespace host only — those buttons never control the PC host.
 
+export type ProfileSessionInfo = {
+  active: boolean;
+  startedAt: string | null; // ISO time the live session started
+  streamConnected: boolean; // a stream screen is connected right now
+};
+
 export type ProfileInfo = {
   id: string;
   name: string;
   browser: string; // "chromium" | "firefox"
   description?: string | null; // optional purpose label (additive; may be absent in older responses)
   running: boolean;
+  // Additive session truth (v19 host): absent/null with an older host —
+  // the card then renders nothing extra, exactly as before.
+  session?: ProfileSessionInfo | null;
 };
 
 export type Status = {
@@ -63,20 +72,29 @@ export default function BrowserPanel({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   // Backup-host power confirm: which action is awaiting confirmation.
   const [confirmPower, setConfirmPower] = useState<"wake" | "sleep" | null>(null);
+  // Session lock: a launch was refused because this profile's session is
+  // live with its screen connected. The card asks what to do instead of
+  // barging in (or failing with a bare error).
+  const [inUse, setInUse] = useState<{ profileId: string; startedAt: string | null } | null>(null);
 
   const load = refresh;
 
-  async function startProfile(profileId: string) {
+  async function startProfile(profileId: string, opts?: { force?: boolean; mode?: "attach" }) {
     setBusy(true);
     setMsg("");
     try {
       const res = await fetch("/api/browser/launch", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ profileId }),
+        body: JSON.stringify({ profileId, ...(opts?.force ? { force: true } : {}), ...(opts?.mode ? { mode: opts.mode } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.streamUrl) {
+      if (res.status === 409 && data.error === "session_in_use") {
+        // Not an error: the session is in use. Show the choice dialog on
+        // this profile's card and wait for the user's decision.
+        setInUse({ profileId, startedAt: typeof data.startedAt === "string" ? data.startedAt : null });
+      } else if (res.ok && data.streamUrl) {
+        if (inUse?.profileId === profileId) setInUse(null);
         window.open(data.streamUrl, "_blank", "noopener");
         setMsg("Browser started — it opened in a new tab. Your logins stay saved in your account storage.");
       } else {
@@ -326,6 +344,11 @@ export default function BrowserPanel({
             {typeof p.description === "string" && p.description.trim() !== "" && (
               <p className="mt-1.5 text-sm text-zinc-400">{p.description}</p>
             )}
+            {p.running && p.session && (
+              <p className="mt-1.5 text-sm text-zinc-500">
+                Session chal raha hai — since {p.session.startedAt ? new Date(p.session.startedAt).toLocaleString() : "—"} · Screen: {p.session.streamConnected ? "judi hui hai" : "nahi judi"}
+              </p>
+            )}
 
             {deletingId === p.id ? (
               <div className="mt-3 rounded-xl border border-rose-400/20 bg-rose-400/5 px-4 py-3">
@@ -396,6 +419,25 @@ export default function BrowserPanel({
                   </button>
                   <button onClick={() => beginDelete(p.id)} disabled={busy} className="rounded-full border border-rose-400/30 bg-rose-400/5 px-4 py-2 text-sm font-medium text-rose-300 transition hover:bg-rose-400/10 disabled:opacity-50">
                     Delete
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {inUse?.profileId === p.id && (
+              <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3">
+                <p className="text-sm leading-relaxed text-amber-100">
+                  Is profile ka session pehle se chal raha hai aur screen judi hui hai (since {inUse.startedAt ? new Date(inUse.startedAt).toLocaleString() : "—"}). Doosra Start use band kar dega.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button onClick={() => startProfile(p.id, { mode: "attach" })} disabled={busy} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:opacity-50">
+                    {busy ? "Working…" : "Wahi session kholo"}
+                  </button>
+                  <button onClick={() => startProfile(p.id, { force: true })} disabled={busy} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-rose-500/25 transition hover:opacity-90 disabled:opacity-50">
+                    {busy ? "Working…" : "Naya session zabardasti — purana band hoga"}
+                  </button>
+                  <button onClick={() => setInUse(null)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                    Cancel
                   </button>
                 </div>
               </div>
