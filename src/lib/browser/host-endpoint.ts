@@ -51,3 +51,16 @@ export async function resolveOrchestratorBase(): Promise<string | null> {
   const resolved = await resolveOrchestratorBaseDetailed();
   return resolved ? resolved.base : null;
 }
+
+// The host's last-seen time = the HostEndpoint row's last update (every
+// heartbeat refreshes it). Used by the dashboard to say "Host aakhri dafa
+// online tha: …" when the host is offline. Read-only; never changes the
+// resolution semantics above. Null when no heartbeat was ever recorded.
+export async function getHostLastSeenAt(): Promise<Date | null> {
+  try {
+    const row = await prisma.hostEndpoint.findUnique({ where: { id: HOST_ENDPOINT_ID } });
+    return row ? row.updatedAt : null;
+  } catch {
+    return null;
+  }
+}
