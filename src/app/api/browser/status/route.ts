@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
 import { getOrchestratorFor } from "@/lib/browser/orchestrator";
-import { resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
+import { getHostLastSeenAt, resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 
 // GET /api/browser/status — is the browser host connected, and which of the
 // signed-in user's browsers are running? Honest states only: when no
@@ -44,13 +44,18 @@ export async function GET() {
     where: { ownerId: userId },
     orderBy: { createdAt: "asc" }
   });
-  const profiles = rows.map((p) => ({ id: p.id, name: p.name, browser: p.browser, running: false }));
+  const profiles = rows.map((p) => ({ id: p.id, name: p.name, browser: p.browser, description: p.description ?? null, running: false }));
+
+  // Last heartbeat time (additive field): the dashboard shows it as
+  // "Host aakhri dafa online tha: …" whenever the host is offline.
+  const lastSeen = await getHostLastSeenAt();
+  const hostLastSeenAt = lastSeen ? lastSeen.toISOString() : null;
 
   // The host's tunnel URL changes on every restart: prefer a fresh
   // heartbeated URL, fall back to the ORCHESTRATOR_URL env var.
   const base = await resolveOrchestratorBase();
   if (!base) {
-    return NextResponse.json({ configured: false, hostOnline: false, running: false, profiles });
+    return NextResponse.json({ configured: false, hostOnline: false, running: false, profiles, hostLastSeenAt });
   }
 
   const { hostOnline, dockerReady } = await fetchHealth(base);
@@ -66,5 +71,5 @@ export async function GET() {
   }
 
   const running = profiles.some((p) => p.running);
-  return NextResponse.json({ configured: true, hostOnline, dockerReady, running, profiles });
+  return NextResponse.json({ configured: true, hostOnline, dockerReady, running, profiles, hostLastSeenAt });
 }
