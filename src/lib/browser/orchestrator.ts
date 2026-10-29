@@ -36,6 +36,37 @@ export interface LaunchRequest {
   viewportHeight: number;
   viewOnly: boolean; // view-only shares: no input, no clipboard, no downloads
   browser?: string; // per-profile engine: "chromium" | "firefox" (orchestrator picks the image)
+  // Session lock (v19 orchestrator): force explicitly replaces a live
+  // stream-connected session; mode "attach" explicitly joins it. Older
+  // orchestrators ignore both fields.
+  force?: boolean;
+  mode?: "attach";
+}
+
+// Per-profile session truth as reported by the v19 orchestrator
+// (additive: older orchestrators simply don't send it -> null).
+export interface ProfileSessionInfo {
+  active: boolean;
+  startedAt: string | null; // ISO time the live session started
+  streamConnected: boolean; // a stream screen is connected right now
+}
+
+// Typed 409 from the orchestrator's session lock: a launch was refused
+// because the profile's session is live AND its screen is connected.
+// Callers must be able to tell this apart from a generic launch failure.
+export class SessionInUseError extends Error {
+  readonly startedAt: string | null;
+  readonly streamConnected: boolean;
+  constructor(startedAt: string | null, streamConnected: boolean) {
+    super("session_in_use");
+    this.name = "SessionInUseError";
+    this.startedAt = startedAt;
+    this.streamConnected = streamConnected;
+  }
+}
+
+export function isSessionInUse(e: unknown): e is SessionInUseError {
+  return e instanceof SessionInUseError;
 }
 
 export interface BrowserHandle {
@@ -55,6 +86,9 @@ export interface BrowserOrchestrator {
   stop(sessionId: string): Promise<void>;
   status(sessionId: string): Promise<BrowserStatus>;
   reconnect(profileId: string): Promise<BrowserHandle | null>;
+  // reconnect + the additive session-truth object (null session when the
+  // orchestrator is older and doesn't report one, or nothing is live).
+  reconnectWithSession(profileId: string): Promise<{ handle: BrowserHandle | null; session: ProfileSessionInfo | null }>;
   issueStreamToken(sessionId: string): Promise<StreamToken>;
   /** Container egress must block RFC1918 / link-local / 169.254.169.254 (SSRF). Enforced by the orchestrator service + network policy, Phase 3 hardening. */
   readonly name: string;
@@ -88,7 +122,19 @@ export class DockerOrchestrator implements BrowserOrchestrator {
       },
       body: body ? JSON.stringify(body) : undefined
     });
-    if (!res.ok) throw new Error(`Orchestrator service error ${res.status} on ${path}`);
+    if (!res.ok) {
+      // The session lock answers 409 with a JSON contract — surface it as
+      // a typed error, never as a generic failure.
+      if (res.status === 409) {
+        const data = (await res.json().catch(() => null)) as
+          | { error?: string; startedAt?: string | null; streamConnected?: boolean }
+          | null;
+        if (data && data.error === "session_in_use") {
+          throw new SessionInUseError(data.startedAt ?? null, !!data.streamConnected);
+        }
+      }
+      throw new Error(`Orchestrator service error ${res.status} on ${path}`);
+    }
     return (await res.json()) as T;
   }
 
@@ -108,8 +154,15 @@ export class DockerOrchestrator implements BrowserOrchestrator {
     return r.status;
   }
   async reconnect(profileId: string): Promise<BrowserHandle | null> {
-    const r = await this.call<{ handle: BrowserHandle | null }>(`/profiles/${profileId}/reconnect`, {});
-    return r.handle;
+    const { handle } = await this.reconnectWithSession(profileId);
+    return handle;
+  }
+  async reconnectWithSession(profileId: string): Promise<{ handle: BrowserHandle | null; session: ProfileSessionInfo | null }> {
+    const r = await this.call<{ handle: BrowserHandle | null; session?: ProfileSessionInfo | null }>(
+      `/profiles/${profileId}/reconnect`,
+      {}
+    );
+    return { handle: r.handle ?? null, session: r.session ?? null };
   }
   async issueStreamToken(sessionId: string): Promise<StreamToken> {
     // Token is generated app-side, stored hashed in the DB, and the raw value is
@@ -137,6 +190,9 @@ export class LocalStubOrchestrator implements BrowserOrchestrator {
   async stop(): Promise<void> { return this.refuse(); }
   async status(): Promise<BrowserStatus> { return "stopped"; }
   async reconnect(): Promise<BrowserHandle | null> { return null; }
+  async reconnectWithSession(): Promise<{ handle: BrowserHandle | null; session: ProfileSessionInfo | null }> {
+    return { handle: null, session: null };
+  }
   async issueStreamToken(): Promise<StreamToken> { return this.refuse(); }
 }
 
