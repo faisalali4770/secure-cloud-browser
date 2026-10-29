@@ -120,6 +120,9 @@ model BrowserProfile {
   ownerId   String @db.Uuid
   owner     User   @relation("ProfileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   name      String
+  // Optional purpose label the owner gives the profile ("ye profile kis
+  // kaam ke liye hai") — shown on the dashboard card under the name.
+  description String?
   // Browser engine for this profile: "chromium" or "firefox" (chosen at
   // profile creation; validated in the API, stored as a plain string).
   browser   String @default("chromium")
