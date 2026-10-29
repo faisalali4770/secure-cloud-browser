@@ -14,6 +14,16 @@ import { resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 // edit or delete profiles for another. (Sharing profiles with other
 // people is a separate feature and is NOT part of this route.)
 
+// Optional purpose label ("ye profile kis kaam ke liye hai"): free text,
+// max 200 chars; blank/whitespace-only is stored as null (no label).
+const DESCRIPTION_MAX = 200;
+function cleanDescription(value: unknown): { ok: true; value: string | null } | { ok: false } {
+  if (typeof value !== "string") return { ok: false };
+  const trimmed = value.trim();
+  if (trimmed.length > DESCRIPTION_MAX) return { ok: false };
+  return { ok: true, value: trimmed === "" ? null : trimmed };
+}
+
 export async function GET() {
   const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
@@ -23,7 +33,7 @@ export async function GET() {
     orderBy: { createdAt: "asc" }
   });
   return NextResponse.json({
-    profiles: rows.map((p) => ({ id: p.id, name: p.name, browser: p.browser, createdAt: p.createdAt }))
+    profiles: rows.map((p) => ({ id: p.id, name: p.name, browser: p.browser, description: p.description ?? null, createdAt: p.createdAt }))
   });
 }
 
@@ -41,6 +51,15 @@ export async function POST(req: Request) {
   if (browser !== "chromium" && browser !== "firefox") {
     return NextResponse.json({ error: 'Browser must be "chromium" or "firefox".' }, { status: 400 });
   }
+  // Optional purpose label; absent is fine, malformed is a 400.
+  let description: string | null = null;
+  if (body && body.description !== undefined && body.description !== null) {
+    const cleaned = cleanDescription(body.description);
+    if (!cleaned.ok) {
+      return NextResponse.json({ error: `Profile description must be text of at most ${DESCRIPTION_MAX} characters.` }, { status: 400 });
+    }
+    description = cleaned.value;
+  }
 
   const count = await prisma.browserProfile.count({ where: { ownerId: userId } });
   if (count >= BROWSER_LIMITS.maxProfilesPerUser) {
@@ -55,10 +74,10 @@ export async function POST(req: Request) {
   // `u-<userId>` key.
   const storageKey = `u-${userId}-${randomBytes(4).toString("hex")}`;
   const profile = await prisma.browserProfile.create({
-    data: { ownerId: userId, name, browser, storageKey }
+    data: { ownerId: userId, name, browser, description, storageKey }
   });
   return NextResponse.json(
-    { id: profile.id, name: profile.name, browser: profile.browser, createdAt: profile.createdAt },
+    { id: profile.id, name: profile.name, browser: profile.browser, description: profile.description ?? null, createdAt: profile.createdAt },
     { status: 201 }
   );
 }
@@ -76,10 +95,11 @@ export async function PATCH(req: Request) {
   // an edit — a profile keeps its stored data and its owner, always.
   const hasName = body !== null && typeof body.name === "string";
   const hasBrowser = body !== null && typeof body.browser === "string";
-  if (!hasName && !hasBrowser) {
-    return NextResponse.json({ error: "Nothing to update — provide a name and/or a browser." }, { status: 400 });
+  const hasDescription = body !== null && typeof body.description === "string";
+  if (!hasName && !hasBrowser && !hasDescription) {
+    return NextResponse.json({ error: "Nothing to update — provide a name, a browser and/or a description." }, { status: 400 });
   }
-  const data: { name?: string; browser?: string } = {};
+  const data: { name?: string; browser?: string; description?: string | null } = {};
   if (hasName) {
     const name = (body.name as string).trim();
     if (name.length < 1 || name.length > 40) {
@@ -94,6 +114,13 @@ export async function PATCH(req: Request) {
     }
     data.browser = browser;
   }
+  if (hasDescription) {
+    const cleaned = cleanDescription(body.description);
+    if (!cleaned.ok) {
+      return NextResponse.json({ error: `Profile description must be text of at most ${DESCRIPTION_MAX} characters.` }, { status: 400 });
+    }
+    data.description = cleaned.value; // empty string clears the label (null)
+  }
 
   // Ownership: the profile must belong to the caller (404 otherwise —
   // never leak that another user's profile exists).
@@ -101,7 +128,7 @@ export async function PATCH(req: Request) {
   if (!existing) return NextResponse.json({ error: "Profile not found." }, { status: 404 });
 
   const profile = await prisma.browserProfile.update({ where: { id: existing.id }, data });
-  return NextResponse.json({ id: profile.id, name: profile.name, browser: profile.browser, createdAt: profile.createdAt });
+  return NextResponse.json({ id: profile.id, name: profile.name, browser: profile.browser, description: profile.description ?? null, createdAt: profile.createdAt });
 }
 
 export async function DELETE(req: Request) {
