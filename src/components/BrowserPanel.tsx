@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 // Live browser panel for the dashboard: real status from /api/browser/status,
 // Start/Stop wired to the orchestrator via the app API. Every state shown is
@@ -38,7 +38,39 @@ export type Status = {
   running: boolean;
   profiles?: ProfileInfo[];
   hostLastSeenAt?: string | null; // ISO time of the last host heartbeat (additive)
+  hostPrevEnd?: string | null; // "abrupt" | "clean" | null — how the host's previous run ended (additive, v20 agent)
 };
+
+// v20 login estimate, per profile card. The host answers presence
+// booleans only; the view labels them as an estimate, never a guarantee.
+export type LoginUi =
+  | { state: "loading" }
+  | { state: "done"; storeFound: boolean; sites: { site: string; label: string; likelySignedIn: boolean }[] }
+  | { state: "outdated" }
+  | { state: "error"; message: string };
+
+function LoginResultView({ ui }: { ui: LoginUi | undefined }) {
+  if (!ui || ui.state === "loading") return null;
+  if (ui.state === "outdated") {
+    return <p className="mt-2 text-sm text-amber-300">Host purana hai — naya setup (v20) chalao, phir login check kaam karega.</p>;
+  }
+  if (ui.state === "error") {
+    return <p className="mt-2 text-sm text-rose-300">{ui.message}</p>;
+  }
+  if (!ui.storeFound) {
+    return <p className="mt-2 text-sm text-zinc-400">Is profile mein abhi koi login data nahi mila.</p>;
+  }
+  return (
+    <div className="mt-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+      {ui.sites.map((s) => (
+        <p key={s.site} className="text-sm leading-relaxed text-zinc-300">
+          Andaza: {s.label} — {s.likelySignedIn ? "login lagta hai" : "login nahi lagta"}
+        </p>
+      ))}
+      <p className="mt-1.5 text-xs text-zinc-500">Ye sirf andaza hai — pakki tasdeeq ke liye site khol kar dekho.</p>
+    </div>
+  );
+}
 
 // Mirrors BROWSER_LIMITS.maxProfilesPerUser on the server. That constant
 // lives in a server lib (imports crypto), so it cannot be imported into
@@ -76,8 +108,28 @@ export default function BrowserPanel({
   // live with its screen connected. The card asks what to do instead of
   // barging in (or failing with a bare error).
   const [inUse, setInUse] = useState<{ profileId: string; startedAt: string | null } | null>(null);
+  // v20 host features (per profile): restart-browser confirm, the login
+  // estimate result, and the Inbox upload's per-card feedback.
+  const [restartConfirmId, setRestartConfirmId] = useState<string | null>(null);
+  const [loginByProfile, setLoginByProfile] = useState<Record<string, LoginUi>>({});
+  const [inboxByProfile, setInboxByProfile] = useState<Record<string, string>>({});
 
   const load = refresh;
+
+  // Immediate status refresh after an action, plus ONE more a few
+  // seconds later: a status snapshot taken in the same instant as a
+  // launch/stop can race the host's view of the container, and without
+  // the second look the card kept showing the pre-action state until
+  // the 15 s poll (seen live: Start succeeded, card still "Stopped").
+  const refreshTimer = useRef<number | null>(null);
+  function refreshSoon() {
+    load();
+    if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = null;
+      load();
+    }, 2500);
+  }
 
   async function startProfile(profileId: string, opts?: { force?: boolean; mode?: "attach" }) {
     setBusy(true);
@@ -104,7 +156,7 @@ export default function BrowserPanel({
       setMsg("Browser could not start — the host did not answer.");
     }
     setBusy(false);
-    load();
+    refreshSoon();
   }
 
   async function stopProfile(profileId: string) {
@@ -122,7 +174,96 @@ export default function BrowserPanel({
       setMsg("Stop failed — the host did not answer.");
     }
     setBusy(false);
-    load();
+    refreshSoon();
+  }
+
+  // v20: restart ONLY the browser inside the running container — the
+  // escape hatch for an empty desktop / vanished Chrome, without losing
+  // the session. Tabs come back via the browser's own session restore.
+  async function restartBrowser(profileId: string) {
+    setBusy(true);
+    setMsg("");
+    setRestartConfirmId(null);
+    try {
+      const res = await fetch("/api/browser/restart-browser", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profileId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setMsg("Browser dobara khol diya gaya — tabs restore ho jayenge. Stream wali tab par dobara judne ka intezar karo.");
+      } else if (data.error === "host_outdated") {
+        setMsg(data.message || "Host purana hai — pehle PC par naya setup (v20) chalao.");
+      } else if (data.error === "no_live_session") {
+        setMsg(data.message || "Is profile ka koi session chal nahi raha — pehle browser Start karo.");
+      } else {
+        setMsg(data.error || "Browser restart nahi ho saka.");
+      }
+    } catch {
+      setMsg("Browser restart nahi ho saka — host ne jawab nahi diya.");
+    }
+    setBusy(false);
+    refreshSoon();
+  }
+
+  // v20: sign-in estimate — presence booleans from the host, shown
+  // clearly labelled as an estimate, never as a guarantee.
+  async function runLoginCheck(profileId: string) {
+    setLoginByProfile((m) => ({ ...m, [profileId]: { state: "loading" } }));
+    try {
+      const res = await fetch("/api/browser/login-check", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profileId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data.sites)) {
+        setLoginByProfile((m) => ({
+          ...m,
+          [profileId]: { state: "done", storeFound: !!data.storeFound, sites: data.sites }
+        }));
+      } else if (data.error === "host_outdated") {
+        setLoginByProfile((m) => ({ ...m, [profileId]: { state: "outdated" } }));
+      } else {
+        setLoginByProfile((m) => ({
+          ...m,
+          [profileId]: { state: "error", message: data.error || "Login check nahi ho saka." }
+        }));
+      }
+    } catch {
+      setLoginByProfile((m) => ({
+        ...m,
+        [profileId]: { state: "error", message: "Login check nahi ho saka — host ne jawab nahi diya." }
+      }));
+    }
+  }
+
+  // v20: send a file into the profile's Inbox folder on the PC (the
+  // browser's file picker reaches it from the browser user's home).
+  async function uploadInbox(profileId: string, file: File) {
+    setInboxByProfile((m) => ({ ...m, [profileId]: "File bheji ja rahi hai…" }));
+    try {
+      const form = new FormData();
+      form.set("profileId", profileId);
+      form.set("file", file);
+      const res = await fetch("/api/browser/inbox", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setInboxByProfile((m) => ({
+          ...m,
+          [profileId]: `File bhej di gayi: ${typeof data.name === "string" ? data.name : file.name} — browser ke file picker mein Inbox folder mein milegi.`
+        }));
+      } else if (data.error === "host_outdated") {
+        setInboxByProfile((m) => ({ ...m, [profileId]: data.message || "Host purana hai — pehle PC par naya setup (v20) chalao." }));
+      } else if (data.error === "file_too_large") {
+        setInboxByProfile((m) => ({ ...m, [profileId]: "File bohat bari hai — zyada se zyada 25 MB." }));
+      } else {
+        setInboxByProfile((m) => ({ ...m, [profileId]: data.error || "File nahi bheji ja saki." }));
+      }
+    } catch {
+      setInboxByProfile((m) => ({ ...m, [profileId]: "File nahi bheji ja saki — host ne jawab nahi diya." }));
+    }
   }
 
   async function addProfile() {
@@ -147,7 +288,7 @@ export default function BrowserPanel({
       setMsg("Profile could not be created — the site did not answer.");
     }
     setBusy(false);
-    load();
+    refreshSoon();
   }
 
   function beginEdit(p: ProfileInfo) {
@@ -179,7 +320,7 @@ export default function BrowserPanel({
       setMsg("Profile could not be updated — the site did not answer.");
     }
     setBusy(false);
-    load();
+    refreshSoon();
   }
 
   function beginDelete(profileId: string) {
@@ -208,7 +349,7 @@ export default function BrowserPanel({
       setMsg("Profile could not be deleted — the site did not answer.");
     }
     setBusy(false);
-    load();
+    refreshSoon();
   }
 
   async function wake() {
@@ -287,6 +428,17 @@ export default function BrowserPanel({
       ? new Date(status.hostLastSeenAt).toLocaleString()
       : null;
 
+  // Previous-run classification (v20 agent): one subtle line, shown only
+  // while the host is ONLINE and the server actually sent a known value —
+  // an older agent or app response leaves the field absent/null and
+  // nothing renders.
+  const prevEndText =
+    status && status.hostOnline && status.hostPrevEnd === "abrupt"
+      ? "Pichli dafa host achanak band hua tha (bijli / crash)"
+      : status && status.hostOnline && status.hostPrevEnd === "clean"
+        ? "Pichli dafa host saf tareeqay se band hua tha"
+        : null;
+
   const explanation = !status
     ? "Checking your browser host…"
     : !status.configured
@@ -325,6 +477,9 @@ export default function BrowserPanel({
       <p className="mt-3 text-sm leading-relaxed text-zinc-400">{explanation}</p>
       {lastSeenText && (
         <p className="mt-2 text-sm text-zinc-500">Host aakhri dafa online tha: {lastSeenText}</p>
+      )}
+      {prevEndText && (
+        <p className="mt-2 text-sm text-zinc-500">{prevEndText}</p>
       )}
       {msg && <p className="mt-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-zinc-200">{msg}</p>}
 
@@ -422,6 +577,58 @@ export default function BrowserPanel({
                   </button>
                 </div>
               </div>
+            )}
+
+            {/* v20 host features row: restart the browser in place, send a
+                file into the profile's Inbox, or run the login estimate.
+                On a pre-v20 host these answer with a "host purana hai"
+                notice instead of breaking anything. */}
+            {deletingId !== p.id && editingId !== p.id && (
+              <>
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  {p.running && restartConfirmId !== p.id && (
+                    <button onClick={() => setRestartConfirmId(p.id)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                      {p.browser === "firefox" ? "Browser dobara kholo" : "Chrome dobara kholo"}
+                    </button>
+                  )}
+                  <label className="cursor-pointer rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10">
+                    File bhejo (Inbox)
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files && e.target.files[0];
+                        e.target.value = "";
+                        if (f) uploadInbox(p.id, f);
+                      }}
+                    />
+                  </label>
+                  <button
+                    onClick={() => runLoginCheck(p.id)}
+                    disabled={loginByProfile[p.id]?.state === "loading"}
+                    className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50"
+                  >
+                    {loginByProfile[p.id]?.state === "loading" ? "Check ho raha hai…" : "Login check"}
+                  </button>
+                </div>
+                {restartConfirmId === p.id && (
+                  <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3">
+                    <p className="text-sm leading-relaxed text-amber-100">
+                      Chal raha {p.browser === "firefox" ? "browser" : "Chrome"} band karke usi profile mein dobara khulega — tabs restore ho jayenge.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button onClick={() => restartBrowser(p.id)} disabled={busy} className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-indigo-500/25 transition hover:opacity-90 disabled:opacity-50">
+                        {busy ? "Working…" : "Haan, dobara kholo"}
+                      </button>
+                      <button onClick={() => setRestartConfirmId(null)} disabled={busy} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {inboxByProfile[p.id] && <p className="mt-2 text-sm text-zinc-400">{inboxByProfile[p.id]}</p>}
+                <LoginResultView ui={loginByProfile[p.id]} />
+              </>
             )}
 
             {inUse?.profileId === p.id && (
