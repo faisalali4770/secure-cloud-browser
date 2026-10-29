@@ -69,6 +69,32 @@ export function isSessionInUse(e: unknown): e is SessionInUseError {
   return e instanceof SessionInUseError;
 }
 
+// Any non-OK answer from the orchestrator, carrying its HTTP status so
+// callers can tell "the host is too old for this endpoint" (404 — the
+// endpoint did not exist before v20) apart from real failures.
+export class OrchestratorHttpError extends Error {
+  readonly status: number;
+  constructor(status: number, path: string) {
+    super(`Orchestrator service error ${status} on ${path}`);
+    this.name = "OrchestratorHttpError";
+    this.status = status;
+  }
+}
+
+// Sign-in estimate (v20 orchestrator): presence booleans ONLY — the
+// orchestrator never returns cookie values, and this is an estimate by
+// design (a server can kill a session whose cookies still sit on disk).
+export interface LoginCheckSite {
+  site: string;
+  label: string;
+  likelySignedIn: boolean;
+}
+export interface LoginCheckResult {
+  storeFound: boolean;
+  sites: LoginCheckSite[];
+  checkedAt: string;
+}
+
 export interface BrowserHandle {
   sessionId: string;
   status: BrowserStatus;
@@ -90,6 +116,11 @@ export interface BrowserOrchestrator {
   // orchestrator is older and doesn't report one, or nothing is live).
   reconnectWithSession(profileId: string): Promise<{ handle: BrowserHandle | null; session: ProfileSessionInfo | null }>;
   issueStreamToken(sessionId: string): Promise<StreamToken>;
+  // v20 host features (older hosts answer 404 -> OrchestratorHttpError,
+  // which the API routes translate into a "host purana hai" notice):
+  restartBrowser(profileId: string): Promise<{ ok: boolean; restarted: boolean }>;
+  loginCheck(profileId: string, storageKey: string): Promise<LoginCheckResult>;
+  uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }>;
   /** Container egress must block RFC1918 / link-local / 169.254.169.254 (SSRF). Enforced by the orchestrator service + network policy, Phase 3 hardening. */
   readonly name: string;
 }
@@ -133,7 +164,7 @@ export class DockerOrchestrator implements BrowserOrchestrator {
           throw new SessionInUseError(data.startedAt ?? null, !!data.streamConnected);
         }
       }
-      throw new Error(`Orchestrator service error ${res.status} on ${path}`);
+      throw new OrchestratorHttpError(res.status, path);
     }
     return (await res.json()) as T;
   }
@@ -171,6 +202,32 @@ export class DockerOrchestrator implements BrowserOrchestrator {
     await this.call(`/containers/${sessionId}/stream-token`, { tokenHash: token.tokenHash, expiresAt: token.expiresAt });
     return token;
   }
+  async restartBrowser(profileId: string): Promise<{ ok: boolean; restarted: boolean }> {
+    return this.call<{ ok: boolean; restarted: boolean }>(`/profiles/${profileId}/restart-browser`, {});
+  }
+  async loginCheck(profileId: string, storageKey: string): Promise<LoginCheckResult> {
+    // The storageKey lets the host find the profile's saved data even
+    // when no session is running (a live session's key wins host-side).
+    return this.call<LoginCheckResult>(`/profiles/${profileId}/login-check`, { storageKey });
+  }
+  async uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }> {
+    // Raw bytes, not JSON: the file name rides in a header (the
+    // orchestrator reduces it to a basename before touching disk) and
+    // the profile's storageKey alongside it (used only when the profile
+    // has no live session — the app verified ownership before calling).
+    const path = `/profiles/${profileId}/inbox`;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.internalToken}`,
+        "x-storage-key": storageKey,
+        "x-file-name": encodeURIComponent(fileName)
+      },
+      body: data as unknown as BodyInit
+    });
+    if (!res.ok) throw new OrchestratorHttpError(res.status, path);
+    return (await res.json()) as { ok: boolean; name: string; size: number };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +251,9 @@ export class LocalStubOrchestrator implements BrowserOrchestrator {
     return { handle: null, session: null };
   }
   async issueStreamToken(): Promise<StreamToken> { return this.refuse(); }
+  async restartBrowser(): Promise<{ ok: boolean; restarted: boolean }> { return this.refuse(); }
+  async loginCheck(): Promise<LoginCheckResult> { return this.refuse(); }
+  async uploadInbox(): Promise<{ ok: boolean; name: string; size: number }> { return this.refuse(); }
 }
 
 export function getOrchestrator(): BrowserOrchestrator {
