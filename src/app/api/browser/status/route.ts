@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
 import { getOrchestratorFor, type ProfileSessionInfo } from "@/lib/browser/orchestrator";
-import { getHostLastSeenAt, resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
+import { getHostLastSeenAt, getHostPrevEnd, resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 
 // GET /api/browser/status — is the browser host connected, and which of the
 // signed-in user's browsers are running? Honest states only: when no
@@ -61,11 +61,16 @@ export async function GET() {
   const lastSeen = await getHostLastSeenAt();
   const hostLastSeenAt = lastSeen ? lastSeen.toISOString() : null;
 
+  // Previous-run classification (additive field, v20 agent): "abrupt" |
+  // "clean" | null. The panel shows it as one small line while the host
+  // is online; null/absent with an older agent renders nothing.
+  const hostPrevEnd = await getHostPrevEnd();
+
   // The host's tunnel URL changes on every restart: prefer a fresh
   // heartbeated URL, fall back to the ORCHESTRATOR_URL env var.
   const base = await resolveOrchestratorBase();
   if (!base) {
-    return NextResponse.json({ configured: false, hostOnline: false, running: false, profiles, hostLastSeenAt });
+    return NextResponse.json({ configured: false, hostOnline: false, running: false, profiles, hostLastSeenAt, hostPrevEnd });
   }
 
   const { hostOnline, dockerReady } = await fetchHealth(base);
@@ -90,5 +95,5 @@ export async function GET() {
   }
 
   const running = profiles.some((p) => p.running);
-  return NextResponse.json({ configured: true, hostOnline, dockerReady, running, profiles, hostLastSeenAt });
+  return NextResponse.json({ configured: true, hostOnline, dockerReady, running, profiles, hostLastSeenAt, hostPrevEnd });
 }
