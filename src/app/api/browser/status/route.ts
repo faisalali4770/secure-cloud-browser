@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
-import { getOrchestratorFor } from "@/lib/browser/orchestrator";
+import { getOrchestratorFor, type ProfileSessionInfo } from "@/lib/browser/orchestrator";
 import { getHostLastSeenAt, resolveOrchestratorBase } from "@/lib/browser/host-endpoint";
 
 // GET /api/browser/status — is the browser host connected, and which of the
@@ -44,7 +44,17 @@ export async function GET() {
     where: { ownerId: userId },
     orderBy: { createdAt: "asc" }
   });
-  const profiles = rows.map((p) => ({ id: p.id, name: p.name, browser: p.browser, description: p.description ?? null, running: false }));
+  const profiles = rows.map((p) => ({
+    id: p.id,
+    name: p.name,
+    browser: p.browser,
+    description: p.description ?? null,
+    running: false,
+    // Additive session truth (v19 orchestrator): filled in below when the
+    // host reports it; stays null with an older orchestrator and the panel
+    // simply renders nothing extra.
+    session: null as ProfileSessionInfo | null
+  }));
 
   // Last heartbeat time (additive field): the dashboard shows it as
   // "Host aakhri dafa online tha: …" whenever the host is offline.
@@ -63,11 +73,20 @@ export async function GET() {
   if (hostOnline && dockerReady && rows.length > 0) {
     const orchestrator = getOrchestratorFor(base);
     // One reconnect check per profile, in parallel; a failed check means
-    // "not running" for that profile only.
-    const flags = await Promise.all(
-      rows.map((p) => orchestrator.reconnect(p.id).then((h) => !!h).catch(() => false))
+    // "not running" for that profile only. The v19 orchestrator also
+    // reports the session truth (since when, screen connected?) — older
+    // orchestrators return no session and the field stays null.
+    const details = await Promise.all(
+      rows.map((p) =>
+        orchestrator
+          .reconnectWithSession(p.id)
+          .catch(() => ({ handle: null, session: null }))
+      )
     );
-    flags.forEach((flag, i) => { profiles[i].running = flag; });
+    details.forEach((d, i) => {
+      profiles[i].running = !!d.handle;
+      profiles[i].session = d.session;
+    });
   }
 
   const running = profiles.some((p) => p.running);
