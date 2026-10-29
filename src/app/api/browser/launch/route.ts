@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
-import { getOrchestratorFor, BROWSER_LIMITS } from "@/lib/browser/orchestrator";
+import { getOrchestratorFor, isSessionInUse, BROWSER_LIMITS } from "@/lib/browser/orchestrator";
 import { resolveOrchestratorBaseDetailed } from "@/lib/browser/host-endpoint";
 
 // POST /api/browser/launch — start (or reconnect to) the signed-in user's
@@ -12,6 +12,14 @@ import { resolveOrchestratorBaseDetailed } from "@/lib/browser/host-endpoint";
 // profiles to launch. Without it, the caller's first profile is used.
 // Profiles are NEVER created here — only the user creates them himself,
 // via the profiles API / the dashboard form.
+//
+// Session lock (v19): when the profile's session is already live AND a
+// stream screen is connected to it, a plain launch answers 409
+// { error: "session_in_use", startedAt, streamConnected: true } and
+// disturbs nothing — the panel asks the user what to do. The user can
+// then retry with { mode: "attach" } (join the same session) or
+// { force: true } (stop it and start fresh). Older orchestrators never
+// report stream state, so the lock simply never triggers with them.
 //
 // The browser itself runs in a container on the user's Docker host via the
 // orchestrator service. If no host is configured/reachable this returns an
@@ -24,6 +32,10 @@ export async function POST(req: Request) {
   // Tolerant body parse: an empty or invalid body just means "no profileId".
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   const profileId = body && typeof body.profileId === "string" ? body.profileId : undefined;
+  // Session-lock choices from the panel (see the header note): force
+  // replaces a live stream-connected session; mode "attach" joins it.
+  const force = !!(body && body.force === true);
+  const mode = body && body.mode === "attach" ? ("attach" as const) : undefined;
 
   // Resolve the host base dynamically: a fresh heartbeated tunnel URL
   // wins over the static ORCHESTRATOR_URL env var (the tunnel URL changes
@@ -55,8 +67,25 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Already running? Reconnect instead of launching a second container.
-    let handle = await orchestrator.reconnect(profile.id).catch(() => null);
+    // Already running? Reconnect instead of launching a second container —
+    // but never silently barge into a session whose screen is connected:
+    // the panel must ask first (409), unless the user already chose
+    // attach (join it) or force (replace it).
+    const detailed = await orchestrator.reconnectWithSession(profile.id).catch(() => null);
+    let handle = detailed?.handle ?? null;
+    const liveSession = detailed?.session ?? null;
+    if (handle && liveSession?.streamConnected && !force && mode !== "attach") {
+      return NextResponse.json(
+        { error: "session_in_use", startedAt: liveSession.startedAt, streamConnected: true },
+        { status: 409 }
+      );
+    }
+    if (handle && force) {
+      // Explicit replacement: stop the live session, then fall through to
+      // the fresh-launch path below.
+      await orchestrator.stop(handle.sessionId).catch(() => undefined);
+      handle = null;
+    }
     let sessionRowId: string;
     if (handle) {
       // Live on the host. Reuse the newest open row for the token record,
@@ -103,10 +132,19 @@ export async function POST(req: Request) {
           viewportWidth: profile.viewportWidth,
           viewportHeight: profile.viewportHeight,
           viewOnly: false,
-          browser: profile.browser
+          browser: profile.browser,
+          force: force || undefined,
+          mode
         });
       } catch (e) {
-        await prisma.browserSession.update({ where: { id: session.id }, data: { status: "ERROR", stoppedAt: new Date() } });
+        // A session_in_use refusal is not a launch failure: no browser was
+        // started for this attempt, so its row closes as STOPPED, not
+        // ERROR, and the refusal reaches the panel as a 409 (outer catch).
+        if (isSessionInUse(e)) {
+          await prisma.browserSession.update({ where: { id: session.id }, data: { status: "STOPPED", stoppedAt: new Date() } });
+        } else {
+          await prisma.browserSession.update({ where: { id: session.id }, data: { status: "ERROR", stoppedAt: new Date() } });
+        }
         throw e;
       }
       await prisma.browserSession.update({
@@ -134,6 +172,15 @@ export async function POST(req: Request) {
     const streamUrl = `${publicBase}/s/${handle.sessionId}/${encodeURIComponent(token.rawToken)}`;
     return NextResponse.json({ streamUrl, status: "running" });
   } catch (e) {
+    // The orchestrator's own session-lock refusal (a live session raced in
+    // between the pre-check and the launch): forward it as the same 409
+    // contract the panel understands.
+    if (isSessionInUse(e)) {
+      return NextResponse.json(
+        { error: "session_in_use", startedAt: e.startedAt, streamConnected: e.streamConnected },
+        { status: 409 }
+      );
+    }
     const message = e instanceof Error ? e.message : "Browser launch failed.";
     return NextResponse.json(
       { error: `Browser could not start: ${message}` },
