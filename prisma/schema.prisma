@@ -288,5 +288,10 @@ model SecurityEvents {
 model HostEndpoint {
   id        String   @id // fixed value "pc-host" — not a uuid, there is only ever one row
   url       String
+  // How the host's PREVIOUS run ended, as classified by the PC agent and
+  // sent with each heartbeat (v20 agent): "abrupt" (power loss / crash)
+  // or "clean" (proper shutdown). Null = unknown (older agent, or the
+  // agent has not classified a previous run yet).
+  prevEnd   String?
   updatedAt DateTime @updatedAt
 }
