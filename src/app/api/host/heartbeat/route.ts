@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { recordHostHeartbeat } from "@/lib/browser/host-endpoint";
 
-// POST /api/host/heartbeat { url } — the PC host agent reports its current
-// tunnel URL so the app can reach the orchestrator even though the free
-// tunnel URL changes on every host restart.
+// POST /api/host/heartbeat { url, prevEnd? } — the PC host agent reports
+// its current tunnel URL so the app can reach the orchestrator even
+// though the free tunnel URL changes on every host restart. The v20
+// agent also sends prevEnd ("abrupt" | "clean"): how its previous run
+// ended — see the validation below.
 //
 // Auth is the shared internal token in the `x-internal-token` header (the
 // PC agent is not a signed-in user, so there is deliberately no session
@@ -26,6 +28,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Body must be JSON with a url string." }, { status: 400 });
   }
 
+  // prevEnd (v20 agent, additive): how the host's previous run ended.
+  // Only the exact strings "abrupt" / "clean" are accepted. A body with
+  // NO prevEnd field (older agent) leaves the stored value untouched; a
+  // present-but-unusable value stores null (unknown).
+  let prevEnd: string | null | undefined;
+  if (body !== null && typeof body === "object" && "prevEnd" in body) {
+    const raw = (body as { prevEnd?: unknown }).prevEnd;
+    prevEnd = raw === "abrupt" || raw === "clean" ? raw : null;
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -38,6 +50,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "url must be an https://*.trycloudflare.com or https://*.ts.net URL." }, { status: 400 });
   }
 
-  await recordHostHeartbeat(url);
+  await recordHostHeartbeat(url, prevEnd);
   return NextResponse.json({ ok: true });
 }
