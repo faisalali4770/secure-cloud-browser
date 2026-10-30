@@ -100,31 +100,6 @@ export interface LoginCheckResult {
   checkedAt: string;
 }
 
-// Connections (v22 host): deploying copies the master account's saved
-// browser data into the target profile (host backs the profile's own
-// data up first; undeploy restores it).
-export interface DeployConnectionBody {
-  storageKey: string; // target profile's key
-  sourceStorageKey: string; // master account's key
-  sourceProfileId: string; // master account's id (its launch-time profileId)
-  label: string;
-  siteUrl: string;
-}
-export interface DeployConnectionResult {
-  ok: boolean;
-  deployedAt: string;
-  backedUp: boolean;
-  bookmark: boolean;
-  startup: boolean;
-}
-export interface ConnectionCheckResult {
-  ok: boolean;
-  storeFound: boolean;
-  hasCookies: boolean;
-  cookieCount: number;
-  checkedAt: string;
-}
-
 export interface BrowserHandle {
   sessionId: string;
   status: BrowserStatus;
@@ -151,13 +126,6 @@ export interface BrowserOrchestrator {
   restartBrowser(profileId: string): Promise<{ ok: boolean; restarted: boolean }>;
   loginCheck(profileId: string, storageKey: string): Promise<LoginCheckResult>;
   uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }>;
-  // v22 host features (Connections): deploy a master account's saved
-  // session into a profile / undo it / check a master login's cookies /
-  // delete a profile-shaped data dir completely (master cleanup).
-  deployConnection(profileId: string, body: DeployConnectionBody): Promise<DeployConnectionResult>;
-  undeployConnection(profileId: string, storageKey: string): Promise<{ ok: boolean; restored: boolean }>;
-  connectionCheck(accountId: string, storageKey: string, host: string): Promise<ConnectionCheckResult>;
-  deleteProfileData(profileId: string, storageKey: string): Promise<{ ok: boolean }>;
   /** Container egress must block RFC1918 / link-local / 169.254.169.254 (SSRF). Enforced by the orchestrator service + network policy, Phase 3 hardening. */
   readonly name: string;
 }
@@ -245,18 +213,6 @@ export class DockerOrchestrator implements BrowserOrchestrator {
     // when no session is running (a live session's key wins host-side).
     return this.call<LoginCheckResult>(`/profiles/${profileId}/login-check`, { storageKey });
   }
-  async deployConnection(profileId: string, body: DeployConnectionBody): Promise<DeployConnectionResult> {
-    return this.call<DeployConnectionResult>(`/profiles/${profileId}/deploy-connection`, body);
-  }
-  async undeployConnection(profileId: string, storageKey: string): Promise<{ ok: boolean; restored: boolean }> {
-    return this.call<{ ok: boolean; restored: boolean }>(`/profiles/${profileId}/undeploy-connection`, { storageKey });
-  }
-  async connectionCheck(accountId: string, storageKey: string, host: string): Promise<ConnectionCheckResult> {
-    return this.call<ConnectionCheckResult>(`/connections/${accountId}/check`, { storageKey, host });
-  }
-  async deleteProfileData(profileId: string, storageKey: string): Promise<{ ok: boolean }> {
-    return this.call<{ ok: boolean }>(`/profiles/delete`, { profileId, storageKey });
-  }
   async uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }> {
     // Raw bytes, not JSON: the file name rides in a header (the
     // orchestrator reduces it to a basename before touching disk) and
@@ -301,10 +257,6 @@ export class LocalStubOrchestrator implements BrowserOrchestrator {
   async restartBrowser(): Promise<{ ok: boolean; restarted: boolean }> { return this.refuse(); }
   async loginCheck(): Promise<LoginCheckResult> { return this.refuse(); }
   async uploadInbox(): Promise<{ ok: boolean; name: string; size: number }> { return this.refuse(); }
-  async deployConnection(): Promise<DeployConnectionResult> { return this.refuse(); }
-  async undeployConnection(): Promise<{ ok: boolean; restored: boolean }> { return this.refuse(); }
-  async connectionCheck(): Promise<ConnectionCheckResult> { return this.refuse(); }
-  async deleteProfileData(): Promise<{ ok: boolean }> { return this.refuse(); }
 }
 
 export function getOrchestrator(): BrowserOrchestrator {
