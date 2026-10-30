@@ -86,6 +86,7 @@ model User {
 
   sessions              UserSession[]
   profiles              BrowserProfile[]        @relation("ProfileOwner")
+  connectedAccounts     ConnectedAccount[]      @relation("AccountOwner")
   sharesGranted         ProfileShare[]          @relation("ShareOwner")
   sharesReceived        ProfileShare[]          @relation("ShareRecipient")
   invitationsSent       Invitation[]            @relation("InvitationSender")
@@ -142,6 +143,7 @@ model BrowserProfile {
   shares      ProfileShare[]
   invitations Invitation[]
   permissions AccessPermission[]
+  accountAssignments AccountAssignment[]
 
   @@index([ownerId])
 }
@@ -278,6 +280,50 @@ model SecurityEvents {
   @@index([userId])
   @@index([type])
   @@index([createdAt])
+}
+
+// A master account the owner logged into ONCE (Connections panel). Its
+// saved browser data lives on the host under storageKey (a profile-shaped
+// directory that is NOT a BrowserProfile — it never appears in the
+// profiles list and does not count against the profile limit). Deploying
+// the account copies that data into assigned profiles (host-side, with
+// backup), so those profiles open already signed in — no password is
+// ever shared or stored here.
+model ConnectedAccount {
+  id        String @id @default(uuid()) @db.Uuid
+  ownerId   String @db.Uuid
+  owner     User   @relation("AccountOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  label     String
+  // The account's home site (opened at deploy as the profile's startup
+  // page and added to its bookmarks bar).
+  siteUrl   String
+  // "site" = log in on the site itself; "google" = the account signs in
+  // with Google (Gmail) — one Google login also covers every
+  // "Sign in with Google" site, and the panel warns that an assigned
+  // profile can then reach Gmail/Drive too.
+  loginType String @default("site")
+  storageKey String @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments AccountAssignment[]
+
+  @@index([ownerId])
+}
+
+// One account deployed into one profile (an account may be assigned to
+// MANY profiles; each profile receives its own independent copy).
+model AccountAssignment {
+  id         String         @id @default(uuid()) @db.Uuid
+  accountId  String         @db.Uuid
+  account    ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  profileId  String         @db.Uuid
+  profile    BrowserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  deployedAt DateTime?
+  createdAt  DateTime       @default(now())
+
+  @@unique([accountId, profileId])
+  @@index([profileId])
 }
 
 // Single-row table (the row id is always the fixed string "pc-host"): the PC
