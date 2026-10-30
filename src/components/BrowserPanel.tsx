@@ -20,11 +20,21 @@ export type ProfileSessionInfo = {
   streamConnected: boolean; // a stream screen is connected right now
 };
 
+export type ProfileAccount = {
+  label: string;
+  siteUrl: string;
+  loginType: string; // "site" | "google"
+};
+
 export type ProfileInfo = {
   id: string;
   name: string;
   browser: string; // "chromium" | "firefox"
   description?: string | null; // optional purpose label (additive; may be absent in older responses)
+  // Connections (Phase 5): accounts deployed into this profile — the card
+  // shows each one's site icon next to the login check, so what lives
+  // inside the profile is visible at a glance (additive; may be absent).
+  accounts?: ProfileAccount[];
   running: boolean;
   // Additive session truth (v19 host): absent/null with an older host —
   // the card then renders nothing extra, exactly as before.
@@ -48,6 +58,48 @@ export type LoginUi =
   | { state: "done"; storeFound: boolean; sites: { site: string; label: string; likelySignedIn: boolean }[] }
   | { state: "outdated" }
   | { state: "error"; message: string };
+
+// Connections (Phase 5): the accounts deployed into a profile, shown as
+// site-icon chips under the profile's name — the icon is the site's own
+// favicon; if it fails to load, the chip still carries the label.
+function AssignedAccounts({ accounts }: { accounts?: ProfileAccount[] }) {
+  if (!accounts || accounts.length === 0) return null;
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-zinc-500">Is profile mein accounts:</span>
+      {accounts.map((a, i) => {
+        let host = "";
+        try {
+          host = new URL(a.siteUrl).hostname;
+        } catch {
+          host = "";
+        }
+        return (
+          <span
+            key={`${a.label}-${i}`}
+            title={a.label}
+            className="inline-flex items-center gap-1.5 rounded-full border border-indigo-400/25 bg-indigo-400/10 py-0.5 pl-1.5 pr-2.5 text-[11px] font-medium text-indigo-200"
+          >
+            {host && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={`https://www.google.com/s2/favicons?domain=${host}&sz=64`}
+                alt=""
+                width={14}
+                height={14}
+                className="rounded-sm"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            )}
+            {a.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 function LoginResultView({ ui }: { ui: LoginUi | undefined }) {
   if (!ui || ui.state === "loading") return null;
@@ -499,6 +551,7 @@ export default function BrowserPanel({
             {typeof p.description === "string" && p.description.trim() !== "" && (
               <p className="mt-1.5 text-sm text-zinc-400">{p.description}</p>
             )}
+            <AssignedAccounts accounts={p.accounts} />
             {p.running && p.session && (
               <p className="mt-1.5 text-sm text-zinc-500">
                 Session chal raha hai — since {p.session.startedAt ? new Date(p.session.startedAt).toLocaleString() : "—"} · Screen: {p.session.streamConnected ? "judi hui hai" : "nahi judi"}
