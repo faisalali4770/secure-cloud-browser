@@ -49,9 +49,6 @@ export async function GET() {
     name: p.name,
     browser: p.browser,
     description: p.description ?? null,
-    // Connections (Phase 5): accounts deployed into this profile (DB
-    // truth — shown whether or not the host is online right now).
-    accounts: [] as { label: string; siteUrl: string; loginType: string }[],
     running: false,
     // Additive session truth (v19 orchestrator): filled in below when the
     // host reports it; stays null with an older orchestrator and the panel
@@ -59,21 +56,6 @@ export async function GET() {
     session: null as ProfileSessionInfo | null
   }));
 
-  // Fill in each profile's deployed accounts (one query for all of them).
-  if (rows.length > 0) {
-    const assignments = await prisma.accountAssignment.findMany({
-      where: { profileId: { in: rows.map((p) => p.id) } },
-      include: { account: { select: { label: true, siteUrl: true, loginType: true, ownerId: true } } },
-      orderBy: { createdAt: "asc" }
-    });
-    for (const a of assignments) {
-      // A profile only ever lists its OWNER's accounts (the deploy API
-      // enforces this too — this is belt and braces for the display).
-      if (a.account.ownerId !== userId) continue;
-      const prof = profiles.find((p) => p.id === a.profileId);
-      if (prof) prof.accounts.push({ label: a.account.label, siteUrl: a.account.siteUrl, loginType: a.account.loginType });
-    }
-  }
 
   // Last heartbeat time (additive field): the dashboard shows it as
   // "Host aakhri dafa online tha: …" whenever the host is offline.
