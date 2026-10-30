@@ -74,10 +74,15 @@ export function isSessionInUse(e: unknown): e is SessionInUseError {
 // endpoint did not exist before v20) apart from real failures.
 export class OrchestratorHttpError extends Error {
   readonly status: number;
-  constructor(status: number, path: string) {
+  // The host's own machine-readable error name (e.g. "source_empty",
+  // "not found") when it sent one — lets routes tell a meaningful host
+  // refusal apart from "this host is too old for the endpoint" (404).
+  readonly hostError: string | null;
+  constructor(status: number, path: string, hostError?: string | null) {
     super(`Orchestrator service error ${status} on ${path}`);
     this.name = "OrchestratorHttpError";
     this.status = status;
+    this.hostError = hostError ?? null;
   }
 }
 
@@ -92,6 +97,31 @@ export interface LoginCheckSite {
 export interface LoginCheckResult {
   storeFound: boolean;
   sites: LoginCheckSite[];
+  checkedAt: string;
+}
+
+// Connections (v22 host): deploying copies the master account's saved
+// browser data into the target profile (host backs the profile's own
+// data up first; undeploy restores it).
+export interface DeployConnectionBody {
+  storageKey: string; // target profile's key
+  sourceStorageKey: string; // master account's key
+  sourceProfileId: string; // master account's id (its launch-time profileId)
+  label: string;
+  siteUrl: string;
+}
+export interface DeployConnectionResult {
+  ok: boolean;
+  deployedAt: string;
+  backedUp: boolean;
+  bookmark: boolean;
+  startup: boolean;
+}
+export interface ConnectionCheckResult {
+  ok: boolean;
+  storeFound: boolean;
+  hasCookies: boolean;
+  cookieCount: number;
   checkedAt: string;
 }
 
@@ -121,6 +151,13 @@ export interface BrowserOrchestrator {
   restartBrowser(profileId: string): Promise<{ ok: boolean; restarted: boolean }>;
   loginCheck(profileId: string, storageKey: string): Promise<LoginCheckResult>;
   uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }>;
+  // v22 host features (Connections): deploy a master account's saved
+  // session into a profile / undo it / check a master login's cookies /
+  // delete a profile-shaped data dir completely (master cleanup).
+  deployConnection(profileId: string, body: DeployConnectionBody): Promise<DeployConnectionResult>;
+  undeployConnection(profileId: string, storageKey: string): Promise<{ ok: boolean; restored: boolean }>;
+  connectionCheck(accountId: string, storageKey: string, host: string): Promise<ConnectionCheckResult>;
+  deleteProfileData(profileId: string, storageKey: string): Promise<{ ok: boolean }>;
   /** Container egress must block RFC1918 / link-local / 169.254.169.254 (SSRF). Enforced by the orchestrator service + network policy, Phase 3 hardening. */
   readonly name: string;
 }
@@ -156,15 +193,13 @@ export class DockerOrchestrator implements BrowserOrchestrator {
     if (!res.ok) {
       // The session lock answers 409 with a JSON contract — surface it as
       // a typed error, never as a generic failure.
-      if (res.status === 409) {
-        const data = (await res.json().catch(() => null)) as
-          | { error?: string; startedAt?: string | null; streamConnected?: boolean }
-          | null;
-        if (data && data.error === "session_in_use") {
-          throw new SessionInUseError(data.startedAt ?? null, !!data.streamConnected);
-        }
+      const data = (await res.json().catch(() => null)) as
+        | { error?: string; startedAt?: string | null; streamConnected?: boolean }
+        | null;
+      if (res.status === 409 && data && data.error === "session_in_use") {
+        throw new SessionInUseError(data.startedAt ?? null, !!data.streamConnected);
       }
-      throw new OrchestratorHttpError(res.status, path);
+      throw new OrchestratorHttpError(res.status, path, data?.error ?? null);
     }
     return (await res.json()) as T;
   }
@@ -210,6 +245,18 @@ export class DockerOrchestrator implements BrowserOrchestrator {
     // when no session is running (a live session's key wins host-side).
     return this.call<LoginCheckResult>(`/profiles/${profileId}/login-check`, { storageKey });
   }
+  async deployConnection(profileId: string, body: DeployConnectionBody): Promise<DeployConnectionResult> {
+    return this.call<DeployConnectionResult>(`/profiles/${profileId}/deploy-connection`, body);
+  }
+  async undeployConnection(profileId: string, storageKey: string): Promise<{ ok: boolean; restored: boolean }> {
+    return this.call<{ ok: boolean; restored: boolean }>(`/profiles/${profileId}/undeploy-connection`, { storageKey });
+  }
+  async connectionCheck(accountId: string, storageKey: string, host: string): Promise<ConnectionCheckResult> {
+    return this.call<ConnectionCheckResult>(`/connections/${accountId}/check`, { storageKey, host });
+  }
+  async deleteProfileData(profileId: string, storageKey: string): Promise<{ ok: boolean }> {
+    return this.call<{ ok: boolean }>(`/profiles/delete`, { profileId, storageKey });
+  }
   async uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }> {
     // Raw bytes, not JSON: the file name rides in a header (the
     // orchestrator reduces it to a basename before touching disk) and
@@ -254,6 +301,10 @@ export class LocalStubOrchestrator implements BrowserOrchestrator {
   async restartBrowser(): Promise<{ ok: boolean; restarted: boolean }> { return this.refuse(); }
   async loginCheck(): Promise<LoginCheckResult> { return this.refuse(); }
   async uploadInbox(): Promise<{ ok: boolean; name: string; size: number }> { return this.refuse(); }
+  async deployConnection(): Promise<DeployConnectionResult> { return this.refuse(); }
+  async undeployConnection(): Promise<{ ok: boolean; restored: boolean }> { return this.refuse(); }
+  async connectionCheck(): Promise<ConnectionCheckResult> { return this.refuse(); }
+  async deleteProfileData(): Promise<{ ok: boolean }> { return this.refuse(); }
 }
 
 export function getOrchestrator(): BrowserOrchestrator {
