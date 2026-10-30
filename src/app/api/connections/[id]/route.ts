@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
 import { getOrchestratorFor } from "@/lib/browser/orchestrator";
 import { resolveOrchestratorBaseDetailed } from "@/lib/browser/host-endpoint";
-import { normalizeSiteUrl } from "../route";
+import { normalizeSiteUrl } from "@/lib/connections";
 
 // PATCH  /api/connections/[id] — rename / change site / change login type.
 // DELETE /api/connections/[id] — remove the connection completely: every
