@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth/session";
+import { normalizeSiteUrl } from "@/lib/connections";
 
 // Connections (Phase 5): the owner's master accounts. Each connection is
 // ONE account the owner logs into once (in a master browser on the host);
@@ -16,20 +17,6 @@ import { getSessionUserId } from "@/lib/auth/session";
 //      inside the assigned profile.
 
 const MAX_CONNECTIONS_PER_USER = 10;
-
-export function normalizeSiteUrl(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  let s = raw.trim();
-  if (!s) return null;
-  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
-  try {
-    const u = new URL(s);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
 
 export async function GET() {
   const userId = await getSessionUserId();
