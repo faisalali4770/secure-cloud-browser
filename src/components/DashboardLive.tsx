@@ -1,7 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import BrowserPanel, { type Power, type Status } from "@/components/BrowserPanel";
-import ConnectionsPanel from "@/components/ConnectionsPanel";
 
 // Dashboard live section: owns the SINGLE status/power fetch for the whole
 // dashboard. The browser panel and the stat cards below are both rendered
@@ -130,10 +129,6 @@ export default function DashboardLive() {
         ))}
       </div>
 
-      {/* Connections (Phase 5): master accounts + per-profile deploy.
-          Self-fetching from /api/connections — deliberately independent
-          of the status fetch above so it can never contradict it. */}
-      <ConnectionsPanel />
     </>
   );
 }
