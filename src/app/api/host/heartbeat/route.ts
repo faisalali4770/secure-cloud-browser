@@ -11,7 +11,8 @@ import { recordHostHeartbeat } from "@/lib/browser/host-endpoint";
 // PC agent is not a signed-in user, so there is deliberately no session
 // check). Only tunnel URLs of the two transports the PC agent uses are
 // accepted: https://*.trycloudflare.com (Cloudflare quick tunnel) and
-// https://*.ts.net (Tailscale Funnel — a stable address that does not
+// https://*.serveousercontent.com (Serveo — the registered-name SSH
+// tunnel that replaced the Funnel) and https://*.ts.net (Tailscale Funnel — a stable address that does not
 // bot-block cloud clients the way the free Cloudflare tunnel does).
 //
 // Reachability probe (additive): after a heartbeat is recorded, when the
@@ -90,9 +91,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "url is not a valid URL." }, { status: 400 });
   }
   const host = parsed.hostname;
-  const allowedHost = host.endsWith(".trycloudflare.com") || host.endsWith(".ts.net");
+  const allowedHost = host.endsWith(".trycloudflare.com") || host.endsWith(".ts.net") || host.endsWith(".serveousercontent.com") || host.endsWith(".serveo.net");
   if (parsed.protocol !== "https:" || !allowedHost) {
-    return NextResponse.json({ error: "url must be an https://*.trycloudflare.com or https://*.ts.net URL." }, { status: 400 });
+    return NextResponse.json({ error: "url must be an https://*.trycloudflare.com, https://*.ts.net or https://*.serveousercontent.com URL." }, { status: 400 });
   }
 
   await recordHostHeartbeat(url, prevEnd);
