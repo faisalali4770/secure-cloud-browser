@@ -13,7 +13,10 @@ import { recordHostHeartbeat } from "@/lib/browser/host-endpoint";
 // accepted: https://*.trycloudflare.com (Cloudflare quick tunnel) and
 // https://*.serveousercontent.com (Serveo — the registered-name SSH
 // tunnel that replaced the Funnel) and https://*.ts.net (Tailscale Funnel — a stable address that does not
-// bot-block cloud clients the way the free Cloudflare tunnel does).
+// bot-block cloud clients the way the free Cloudflare tunnel does) and
+// the Cloudflare named-tunnel hostname host.scbfaisal.dpdns.org (and
+// its apex scbfaisal.dpdns.org) — the fixed domain on the free
+// DigitalPlat domain delegated to Cloudflare, which replaced Serveo.
 //
 // Reachability probe (additive): after a heartbeat is recorded, when the
 // reported URL is a *.ts.net URL this route may probe `${url}/health`
@@ -91,20 +94,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "url is not a valid URL." }, { status: 400 });
   }
   const host = parsed.hostname;
-  const allowedHost = host.endsWith(".trycloudflare.com") || host.endsWith(".ts.net") || host.endsWith(".serveousercontent.com") || host.endsWith(".serveo.net");
+  const allowedHost = host.endsWith(".trycloudflare.com") || host.endsWith(".ts.net") || host.endsWith(".serveousercontent.com") || host.endsWith(".serveo.net") || host === "host.scbfaisal.dpdns.org" || host === "scbfaisal.dpdns.org";
   if (parsed.protocol !== "https:" || !allowedHost) {
-    return NextResponse.json({ error: "url must be an https://*.trycloudflare.com, https://*.ts.net or https://*.serveousercontent.com URL." }, { status: 400 });
+    return NextResponse.json({ error: "url must be an https://*.trycloudflare.com, https://*.ts.net, https://*.serveousercontent.com or https://host.scbfaisal.dpdns.org URL." }, { status: 400 });
   }
 
   await recordHostHeartbeat(url, prevEnd);
 
-  // Reachability probe (see the header comment): only for ts.net URLs,
-  // at most once per PROBE_MIN_INTERVAL_MS, and fully failure-isolated —
-  // the heartbeat has already been recorded and always answers ok:true.
+  // Reachability probe (see the header comment): only for ts.net URLs
+  // and the Cloudflare named-tunnel hostname, at most once per
+  // PROBE_MIN_INTERVAL_MS, and fully failure-isolated — the heartbeat
+  // has already been recorded and always answers ok:true.
   // `probeOk` is added to the response only when a probe actually ran.
   const payload: { ok: true; probeOk?: boolean } = { ok: true };
   const nowMs = Date.now();
-  if (host.endsWith(".ts.net") && nowMs - lastProbeAtMs >= PROBE_MIN_INTERVAL_MS) {
+  if ((host.endsWith(".ts.net") || host === "host.scbfaisal.dpdns.org" || host === "scbfaisal.dpdns.org") && nowMs - lastProbeAtMs >= PROBE_MIN_INTERVAL_MS) {
     lastProbeAtMs = nowMs;
     payload.probeOk = await probeHostHealth(url.replace(/\/+$/, ""), expected);
   }
