@@ -113,6 +113,13 @@ export default function BrowserPanel({
   const [restartConfirmId, setRestartConfirmId] = useState<string | null>(null);
   const [loginByProfile, setLoginByProfile] = useState<Record<string, LoginUi>>({});
   const [inboxByProfile, setInboxByProfile] = useState<Record<string, string>>({});
+  // Code access (v21 host feature): a per-profile token an AI agent uses
+  // to drive this profile's Chrome by code (DevTools protocol) instead of
+  // the screen stream. The address is shown once, here, after minting.
+  const [agentByProfile, setAgentByProfile] = useState<
+    Record<string, { state: "loading" | "ready" | "error"; cdpBase?: string; expiresAt?: string; message?: string }>
+  >({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const load = refresh;
 
@@ -205,6 +212,61 @@ export default function BrowserPanel({
     }
     setBusy(false);
     refreshSoon();
+  }
+
+  // Code access (v21): mint a token for this profile and show its CDP
+  // address once, with a copy button — hand it to an AI agent and it can
+  // drive this browser by code, several times faster than the stream.
+  async function mintAgentToken(profileId: string) {
+    setAgentByProfile((m) => ({ ...m, [profileId]: { state: "loading" } }));
+    try {
+      const res = await fetch("/api/browser/agent-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profileId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && typeof data.cdpBase === "string") {
+        setAgentByProfile((m) => ({
+          ...m,
+          [profileId]: { state: "ready", cdpBase: data.cdpBase, expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : "" },
+        }));
+      } else if (data.error === "host_outdated") {
+        setAgentByProfile((m) => ({ ...m, [profileId]: { state: "error", message: data.message || "Host purana hai — code access ke liye v21 chahiye." } }));
+      } else {
+        setAgentByProfile((m) => ({ ...m, [profileId]: { state: "error", message: data.message || data.error || "Chaabi nahi ban saki." } }));
+      }
+    } catch {
+      setAgentByProfile((m) => ({ ...m, [profileId]: { state: "error", message: "Chaabi nahi ban saki — host ne jawab nahi diya." } }));
+    }
+  }
+
+  async function revokeAgentToken(profileId: string) {
+    try {
+      await fetch("/api/browser/agent-token", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profileId }),
+      });
+    } catch {
+      /* best effort — the box closes either way */
+    }
+    setAgentByProfile((m) => {
+      const n = { ...m };
+      delete n[profileId];
+      return n;
+    });
+    setMsg("Code access chaabi khatam kar di gayi — purana address ab kaam nahi karega.");
+  }
+
+  async function copyAgentBase(profileId: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(profileId);
+      window.setTimeout(() => setCopiedId((c) => (c === profileId ? null : c)), 2000);
+    } catch {
+      /* clipboard blocked — the address stays selectable on screen */
+    }
   }
 
   // v20: sign-in estimate — presence booleans from the host, shown
@@ -628,6 +690,45 @@ export default function BrowserPanel({
                 )}
                 {inboxByProfile[p.id] && <p className="mt-2 text-sm text-zinc-400">{inboxByProfile[p.id]}</p>}
                 <LoginResultView ui={loginByProfile[p.id]} />
+
+                {/* Code access (v21): one click mints a token an AI agent
+                    uses to drive this profile's Chrome by code. Firefox is
+                    labelled, never hidden — the host cannot do it there. */}
+                <div className="mt-2.5">
+                  {p.browser === "firefox" ? (
+                    <button disabled className="cursor-not-allowed rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-500" title="Code access sirf Chrome profiles ke liye hai">
+                      Code access chaabi (sirf Chrome)
+                    </button>
+                  ) : agentByProfile[p.id]?.state !== "ready" ? (
+                    <button
+                      onClick={() => mintAgentToken(p.id)}
+                      disabled={busy || agentByProfile[p.id]?.state === "loading"}
+                      className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {agentByProfile[p.id]?.state === "loading" ? "Chaabi ban rahi hai…" : "Code access chaabi"}
+                    </button>
+                  ) : null}
+                  {agentByProfile[p.id]?.state === "error" && (
+                    <p className="mt-2 text-sm text-rose-300">{agentByProfile[p.id].message}</p>
+                  )}
+                  {agentByProfile[p.id]?.state === "ready" && (
+                    <div className="mt-1 rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3">
+                      <p className="text-sm leading-relaxed text-emerald-100">
+                        Ye address jis AI agent ko doge, wo is profile ke browser ko <strong>code se</strong> chala sakega — stream se kai guna tez. Sirf is profile ke liye hai
+                        {agentByProfile[p.id].expiresAt ? <> , aur {new Date(agentByProfile[p.id].expiresAt as string).toLocaleString()} tak chalega</> : null}.
+                      </p>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <code className="min-w-0 flex-1 select-all break-all rounded-lg bg-black/40 px-3 py-2 font-mono text-xs text-emerald-200">{agentByProfile[p.id].cdpBase}</code>
+                        <button onClick={() => copyAgentBase(p.id, agentByProfile[p.id].cdpBase ?? "")} className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/10">
+                          {copiedId === p.id ? "Copy ho gaya ✓" : "Copy"}
+                        </button>
+                        <button onClick={() => revokeAgentToken(p.id)} className="rounded-full border border-rose-400/30 bg-rose-400/5 px-4 py-2 text-sm font-medium text-rose-300 transition hover:bg-rose-400/10">
+                          Chaabi khatam karo
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
