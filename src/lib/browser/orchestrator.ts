@@ -124,6 +124,10 @@ export interface BrowserOrchestrator {
   // v20 host features (older hosts answer 404 -> OrchestratorHttpError,
   // which the API routes translate into a "host purana hai" notice):
   restartBrowser(profileId: string): Promise<{ ok: boolean; restarted: boolean }>;
+  // v21 host feature: scoped CODE ACCESS (DevTools) token for one profile.
+  // The raw token is returned once; the host stores only its hash.
+  mintAgentToken(profileId: string, ttlMinutes?: number): Promise<{ token: string; expiresAt: string }>;
+  revokeAgentToken(profileId: string): Promise<void>;
   loginCheck(profileId: string, storageKey: string): Promise<LoginCheckResult>;
   uploadInbox(profileId: string, storageKey: string, fileName: string, data: Uint8Array): Promise<{ ok: boolean; name: string; size: number }>;
   /** Container egress must block RFC1918 / link-local / 169.254.169.254 (SSRF). Enforced by the orchestrator service + network policy, Phase 3 hardening. */
@@ -208,6 +212,18 @@ export class DockerOrchestrator implements BrowserOrchestrator {
   async restartBrowser(profileId: string): Promise<{ ok: boolean; restarted: boolean }> {
     return this.call<{ ok: boolean; restarted: boolean }>(`/profiles/${profileId}/restart-browser`, {});
   }
+  async mintAgentToken(profileId: string, ttlMinutes?: number): Promise<{ token: string; expiresAt: string }> {
+    const r = await this.call<{ token: string; expiresAt: string }>(`/profiles/${profileId}/agent-token`, { ttlMinutes });
+    return { token: r.token, expiresAt: r.expiresAt };
+  }
+  async revokeAgentToken(profileId: string): Promise<void> {
+    const path = `/profiles/${profileId}/agent-token`;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${this.internalToken}` }
+    });
+    if (!res.ok) throw new OrchestratorHttpError(res.status, path);
+  }
   async loginCheck(profileId: string, storageKey: string): Promise<LoginCheckResult> {
     // The storageKey lets the host find the profile's saved data even
     // when no session is running (a live session's key wins host-side).
@@ -255,6 +271,8 @@ export class LocalStubOrchestrator implements BrowserOrchestrator {
   }
   async issueStreamToken(): Promise<StreamToken> { return this.refuse(); }
   async restartBrowser(): Promise<{ ok: boolean; restarted: boolean }> { return this.refuse(); }
+  async mintAgentToken(): Promise<{ token: string; expiresAt: string }> { return this.refuse(); }
+  async revokeAgentToken(): Promise<void> { return this.refuse(); }
   async loginCheck(): Promise<LoginCheckResult> { return this.refuse(); }
   async uploadInbox(): Promise<{ ok: boolean; name: string; size: number }> { return this.refuse(); }
 }
