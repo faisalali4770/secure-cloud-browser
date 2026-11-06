@@ -20,7 +20,7 @@ export const BROWSER_LIMITS = {
   profileDiskMb: Number(process.env.BROWSER_PROFILE_DISK_LIMIT_MB || 2048),
   idleTimeoutMinutes: Number(process.env.BROWSER_IDLE_TIMEOUT_MINUTES || 30),
   absoluteSessionHours: Number(process.env.BROWSER_ABSOLUTE_SESSION_HOURS || 12),
-  maxProfilesPerUser: Number(process.env.MAX_PROFILES_PER_USER || 3),
+  maxProfilesPerUser: Number(process.env.MAX_PROFILES_PER_USER || 10),
   maxSharesPerProfile: Number(process.env.MAX_SHARES_PER_PROFILE || 5),
   streamTokenTtlSeconds: Number(process.env.STREAM_TOKEN_TTL_SECONDS || 300) // <= 5 min
 } as const;
