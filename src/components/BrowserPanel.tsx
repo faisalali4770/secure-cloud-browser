@@ -75,7 +75,7 @@ function LoginResultView({ ui }: { ui: LoginUi | undefined }) {
 // Mirrors BROWSER_LIMITS.maxProfilesPerUser on the server. That constant
 // lives in a server lib (imports crypto), so it cannot be imported into
 // this client component — keep the two in sync.
-const PROFILE_LIMIT = 3;
+const PROFILE_LIMIT = 10;
 
 export type Power = {
   configured: boolean;
